@@ -53,7 +53,8 @@
   :var (navegosa--scripts-cache)
 
   (before-each
-    (setq navegosa--scripts-cache "const Navegosa = {};"))
+    (setq navegosa--scripts-cache "const Navegosa = {};")
+    (spy-on 'navegosa--ensure-macos))
 
   (it "parses JSON object results into plists"
     (spy-on 'call-process-region
@@ -435,6 +436,7 @@
   (it "creates an async process"
     (let ((navegosa--scripts-cache "const Navegosa = {};")
           (proc-args nil))
+      (spy-on 'navegosa--ensure-macos)
       (spy-on 'make-process
               :and-call-fake (lambda (&rest args)
                                (setq proc-args args)
