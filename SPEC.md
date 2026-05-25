@@ -80,7 +80,7 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - [done] Properties: :URL:, :WINDOW-INDEX:, :TAB-INDEX:, :ACTIVE:
 - [done] Keybindings: RET=switch, d=close, g=refresh, q=quit, o=browse-url
 
-### Tests (35 specs)
+### Tests (45 specs)
 
 - [done] JS script loading (file exists, caches)
 - [done] Argument serialization (quoting, special chars, type rejection)
@@ -96,14 +96,26 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - [done] navegosa-tabs-close (confirm+close+refresh, decline does nothing)
 - [done] navegosa-tabs-browse-url (eww called with URL, error when not on tab)
 
-## Deferred (post-v1)
+## V2: Jump to link
+
+- [done] `navegosa-jump-to-link` - collect links from active tab, inject hint overlays, present via consult/completing-read
+- [done] JS: `getLinksAndInjectHints` - single round-trip: query `<a[href]>`, filter invisible/viewport, generate A-Z/AA-ZZ hints, inject styled overlays + highlight/cleanup functions, return `[{hint, text, href, index}]`
+- [done] JS: `highlightLink`, `clearLinkHints`, `clickLink`, `openLinkNewTab`
+- [done] `navegosa--run-async` - fire-and-forget JXA via `make-process` (non-blocking highlight/cleanup)
+- [done] Debounced highlight timer (50ms) for consult `:state` preview
+- [done] `unwind-protect` cleanup on C-g
+- [done] `navegosa-jump-links-scope` defcustom: `viewport` (default) or `all`
+- [done] `navegosa-jump-links-action` defcustom: `same-tab` (default) or `new-tab`
+- [done] 10 new tests (candidate formatting, scope/action dispatch, cleanup on quit, async runner)
+- [done] Fix existing tests for Emacs 29.4 buttercup compatibility (plist-get in expect, ensure-macos on Linux CI)
+
+## Deferred
 
 - Tab groups (Chrome/Brave expose via JXA; Safari doesn't; Arc has "spaces" with thin JXA)
 - Search text across all tabs (execute JS in each tab, collect matches)
 - Scroll-to-text / consult-line style live search (latency concern: ~50-100ms per osascript call, needs debounce ~200-300ms or grab-text-then-search-locally approach)
 - Multi-window support (JXA gives windows() array; UX question is how to pick active window)
 - DOM manipulation (select container, change font/style via execute JS)
-- Async execution (make-process + sentinel for batch operations)
 - Tab reordering (Chrome/Brave support move(); write operations)
 
 ## Design decisions
@@ -141,16 +153,18 @@ Workspace:
 
 Confirmed:
 - All v1 features implemented and E2E tested against live Brave with 49 tabs
+- V2 jump-to-link E2E tested: link collection, hint injection, highlight, cleanup, clickLink all verified against live browser
 - Browser detection returns "Brave Browser.app" (with .app suffix) - works fine with JXA
-- 35 buttercup specs pass (unit + mocked integration)
+- 45 buttercup specs pass (unit + mocked integration)
 - Byte-compilation clean
 - GHA runs on push/PR against Emacs 29.4 and 30.1
 
 Next actions:
 - Start on deferred features (tab groups, search across tabs, scroll-to-text)
-- Consider adding `openTab` to JS dispatch for programmatic tab creation
+- Jump-to-link: add keybinding to toggle same-tab/new-tab from within completing-read
 
 ## Changelog
 
 - 2025-05-25: spec created from design session. V1 scope locked.
 - 2025-05-25: v1 implemented. All core + tabs features done. 35 tests. E2E verified. Pushed 5677f66.
+- 2025-05-25: v2 jump-to-link. Hint overlays, consult live highlight, async runner, 10 new tests, 29.4 test fixes.

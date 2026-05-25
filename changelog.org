@@ -1,4 +1,9 @@
 #+title: Changelog
 
+* 0.2.0 (2026-05-25)
+- Add ~navegosa-jump-to-link~ - jump to page links with hint overlays and live highlighting (consult integration).
+- Add async JXA runner (~navegosa--run-async~) for non-blocking fire-and-forget calls.
+- Fix tests for Emacs 29.4 buttercup compatibility.
+
 * 0.1.0 (2026-05-25)
 - Initial implementation.

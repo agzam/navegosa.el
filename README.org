@@ -50,6 +50,7 @@ Clone the repo and add it to ~load-path~:
 | ~navegosa-insert-link~    | Insert link to active tab (org/markdown/plain)    |
 | ~navegosa-grab-text~      | Get plain text content of active tab              |
 | ~navegosa-tab-to-eww~     | Render active tab content in eww                  |
+| ~navegosa-jump-to-link~   | Jump to a link on the page via completing-read    |
 | ~navegosa-tabs~           | Open Org-based tab manager buffer                 |
 | ~navegosa-reset~          | Clear caches (scripts, browser name)              |
 
@@ -64,6 +65,15 @@ Clone the repo and add it to ~load-path~:
 | ~g~   | Refresh                          |
 | ~o~   | Open tab URL in eww              |
 | ~q~   | Quit                             |
+
+** Jump to link
+
+~navegosa-jump-to-link~ collects links from the active browser tab, injects avy-style hint labels into the page, and presents candidates in Emacs. If ~consult~ is available, candidates preview with live highlighting in the browser as you move through the list. On selection, the link is clicked (same tab) or opened in a new tab.
+
+| Customization                   | Default    | Description                   |
+|---------------------------------+------------+-------------------------------|
+| ~navegosa-jump-links-scope~     | ~viewport~ | ~viewport~ or ~all~           |
+| ~navegosa-jump-links-action~    | ~same-tab~ | ~same-tab~ or ~new-tab~      |
 
 ** Safari note
 
