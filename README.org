@@ -1,0 +1,82 @@
+#+title: navegosa.el
+#+author: Ag Ibragimov
+[[https://github.com/agzam/navegosa.el/actions/workflows/run-tests.yml][https://github.com/agzam/navegosa.el/actions/workflows/run-tests.yml/badge.svg]]
+
+Control web browsers directly from Emacs on macOS via JXA (JavaScript for Automation).
+
+From Spanish /navegar/ - to browse, to navigate.
+
+*macOS only.* JXA has no equivalent on other platforms.
+
+** Supported browsers
+
+Any browser with a Standard Suite scripting dictionary:
+- Safari
+- Google Chrome
+- Brave Browser
+- Arc
+- Chromium-based browsers generally
+
+The default browser is auto-detected. Override with:
+
+#+begin_src emacs-lisp
+(setq navegosa-browser "Brave Browser")
+#+end_src
+
+** Installation
+
+*** straight.el
+
+#+begin_src emacs-lisp
+(straight-use-package '(navegosa :type git :host github :repo "agzam/navegosa.el"))
+#+end_src
+
+*** Manual
+
+Clone the repo and add it to ~load-path~:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/navegosa.el")
+(require 'navegosa)
+#+end_src
+
+** Commands
+
+| Command                   | Description                                      |
+|---------------------------+--------------------------------------------------|
+| ~navegosa-switch-tab~     | Pick a tab via completing-read, switch to it      |
+| ~navegosa-close-tab~      | Pick a tab via completing-read, close it          |
+| ~navegosa-copy-tab-link~  | Copy active tab URL to kill ring                  |
+| ~navegosa-insert-link~    | Insert link to active tab (org/markdown/plain)    |
+| ~navegosa-grab-text~      | Get plain text content of active tab              |
+| ~navegosa-tab-to-eww~     | Render active tab content in eww                  |
+| ~navegosa-tabs~           | Open Org-based tab manager buffer                 |
+| ~navegosa-reset~          | Clear caches (scripts, browser name)              |
+
+** Tab manager
+
+~navegosa-tabs~ opens an Org buffer listing all browser tabs grouped by window.
+
+| Key   | Action                           |
+|-------+----------------------------------|
+| ~RET~ | Switch to tab at point           |
+| ~d~   | Close tab at point (with prompt) |
+| ~g~   | Refresh                          |
+| ~o~   | Open tab URL in eww              |
+| ~q~   | Quit                             |
+
+** Safari note
+
+~navegosa-grab-text~ and ~navegosa-tab-to-eww~ use JavaScript execution in the browser tab. Safari requires an explicit opt-in:
+
+Menu bar -> Develop -> Allow JavaScript from Apple Events
+
+Chrome and Brave do not require this.
+
+** Architecture
+
+All JXA logic lives in a single =navegosa-scripts.js= file - a dispatch object with named functions. Elisp loads it once, appends the call, and pipes the full script to ~osascript~ via stdin. No inline script strings, no shell escaping.
+
+** License
+
+GPL-3.0-or-later
