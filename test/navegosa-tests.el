@@ -62,9 +62,11 @@
               (erase-buffer)
               (insert "{\"url\":\"https://example.com\",\"title\":\"Test\"}")
               0))
-    (let ((result (navegosa--run "getActiveTabInfo" "Safari")))
-      (expect (plist-get result :url) :to-equal "https://example.com")
-      (expect (plist-get result :title) :to-equal "Test")))
+    (let* ((result (navegosa--run "getActiveTabInfo" "Safari"))
+           (url (plist-get result :url))
+           (title (plist-get result :title)))
+      (expect url :to-equal "https://example.com")
+      (expect title :to-equal "Test")))
 
   (it "parses JSON array results into lists"
     (spy-on 'call-process-region
@@ -73,9 +75,10 @@
               (erase-buffer)
               (insert "[{\"title\":\"Tab 1\"},{\"title\":\"Tab 2\"}]")
               0))
-    (let ((result (navegosa--run "getTabs" "Safari")))
+    (let* ((result (navegosa--run "getTabs" "Safari"))
+           (first-title (plist-get (car result) :title)))
       (expect (length result) :to-equal 2)
-      (expect (plist-get (car result) :title) :to-equal "Tab 1")))
+      (expect first-title :to-equal "Tab 1")))
 
   (it "signals error on JXA failure"
     (spy-on 'call-process-region
@@ -155,10 +158,13 @@
         (goto-char (point-min))
         ;; Move to the second tab heading
         (re-search-forward "Tab B")
-        (let ((tab (navegosa-tabs--tab-at-point)))
-          (expect (plist-get tab :url) :to-equal "https://b.com")
-          (expect (plist-get tab :windowIndex) :to-equal 1)
-          (expect (plist-get tab :tabIndex) :to-equal 2)))))
+        (let* ((tab (navegosa-tabs--tab-at-point))
+               (url (plist-get tab :url))
+               (win-idx (plist-get tab :windowIndex))
+               (tab-idx (plist-get tab :tabIndex)))
+          (expect url :to-equal "https://b.com")
+          (expect win-idx :to-equal 1)
+          (expect tab-idx :to-equal 2)))))
 
   (it "returns nil on window heading"
     (let ((tabs '((:windowIndex 1 :tabIndex 1 :url "https://a.com" :title "Tab A" :active nil))))
@@ -311,6 +317,135 @@
         (navegosa-tabs--render tabs)
         (goto-char (point-min))
         (expect (navegosa-tabs-browse-url) :to-throw 'user-error)))))
+
+;;; Jump to link
+
+(describe "navegosa--jump-make-candidates"
+  (it "formats candidates with hint, text, and URL"
+    (let* ((links '((:hint "A" :text "Example" :href "https://example.com" :index 0)
+                    (:hint "B" :text "Other" :href "https://other.com" :index 1)))
+           (candidates (navegosa--jump-make-candidates links))
+           (first-display (car (nth 0 candidates)))
+           (second-display (car (nth 1 candidates))))
+      (expect (length candidates) :to-equal 2)
+      (expect first-display :to-match "\\[A\\] Example")
+      (expect first-display :to-match "https://example.com")
+      (expect second-display :to-match "\\[B\\] Other")))
+
+  (it "shows placeholder for empty link text"
+    (let* ((links '((:hint "A" :text "" :href "https://example.com" :index 0)))
+           (candidates (navegosa--jump-make-candidates links))
+           (display (caar candidates)))
+      (expect display :to-match "(no text)")))
+
+  (it "preserves link plist in cdr"
+    (let* ((links '((:hint "A" :text "Test" :href "https://test.com" :index 5)))
+           (candidates (navegosa--jump-make-candidates links))
+           (link (cdar candidates))
+           (idx (plist-get link :index)))
+      (expect idx :to-equal 5))))
+
+(describe "navegosa-jump-to-link"
+  :var (navegosa--scripts-cache)
+
+  (before-each
+    (setq navegosa--scripts-cache "const Navegosa = {};"))
+
+  (it "calls getLinksAndInjectHints with viewport scope"
+    (let ((navegosa-jump-links-scope 'viewport)
+          (all-calls nil))
+      (spy-on 'navegosa--run
+              :and-call-fake (lambda (fn &rest args)
+                               (push (cons fn args) all-calls)
+                               '((:hint "A" :text "Link" :href "https://a.com" :index 0))))
+      (spy-on 'navegosa--run-async)
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'completing-read :and-return-value "[A] Link  https://a.com")
+      (navegosa-jump-to-link)
+      (let* ((first-call (car (last all-calls)))
+             (fn (car first-call))
+             (scope-arg (nth 2 first-call)))
+        (expect fn :to-equal "getLinksAndInjectHints")
+        (expect scope-arg :to-equal t))))
+
+  (it "calls getLinksAndInjectHints with all scope"
+    (let ((navegosa-jump-links-scope 'all)
+          (all-calls nil))
+      (spy-on 'navegosa--run
+              :and-call-fake (lambda (fn &rest args)
+                               (push (cons fn args) all-calls)
+                               '((:hint "A" :text "Link" :href "https://a.com" :index 0))))
+      (spy-on 'navegosa--run-async)
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'completing-read :and-return-value "[A] Link  https://a.com")
+      (navegosa-jump-to-link)
+      (let* ((first-call (car (last all-calls)))
+             (scope-arg (nth 2 first-call)))
+        (expect scope-arg :to-be nil))))
+
+  (it "clicks link in same-tab mode"
+    (let ((navegosa-jump-links-scope 'viewport)
+          (navegosa-jump-links-action 'same-tab)
+          (click-args nil))
+      (spy-on 'navegosa--run
+              :and-call-fake (lambda (fn &rest args)
+                               (when (equal fn "clickLink")
+                                 (setq click-args (cons fn args)))
+                               '((:hint "A" :text "Link" :href "https://a.com" :index 3))))
+      (spy-on 'navegosa--run-async)
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'completing-read :and-return-value "[A] Link  https://a.com")
+      (navegosa-jump-to-link)
+      (expect (car click-args) :to-equal "clickLink")
+      (expect (nth 2 click-args) :to-equal 3)))
+
+  (it "opens in new tab when configured"
+    (let ((navegosa-jump-links-scope 'viewport)
+          (navegosa-jump-links-action 'new-tab)
+          (open-args nil))
+      (spy-on 'navegosa--run
+              :and-call-fake (lambda (fn &rest args)
+                               (when (equal fn "openLinkNewTab")
+                                 (setq open-args (cons fn args)))
+                               '((:hint "A" :text "Link" :href "https://a.com" :index 0))))
+      (spy-on 'navegosa--run-async)
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'completing-read :and-return-value "[A] Link  https://a.com")
+      (navegosa-jump-to-link)
+      (expect (car open-args) :to-equal "openLinkNewTab")
+      (expect (nth 2 open-args) :to-equal "https://a.com")))
+
+  (it "signals error when no links found"
+    (spy-on 'navegosa--run :and-return-value nil)
+    (spy-on 'navegosa--run-async)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (expect (navegosa-jump-to-link) :to-throw 'user-error))
+
+  (it "cleans up hints even on quit"
+    (spy-on 'navegosa--run
+            :and-return-value '((:hint "A" :text "Link" :href "https://a.com" :index 0)))
+    (spy-on 'navegosa--run-async)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'completing-read :and-call-fake (lambda (&rest _) (signal 'quit nil)))
+    (condition-case nil (navegosa-jump-to-link) (quit nil))
+    (expect 'navegosa--run-async :to-have-been-called-with
+            "clearLinkHints" "Safari")))
+
+(describe "navegosa--run-async"
+  (it "creates an async process"
+    (let ((navegosa--scripts-cache "const Navegosa = {};")
+          (proc-args nil))
+      (spy-on 'make-process
+              :and-call-fake (lambda (&rest args)
+                               (setq proc-args args)
+                               nil))
+      (spy-on 'process-send-string)
+      (spy-on 'process-send-eof)
+      (navegosa--run-async "clearLinkHints" "Safari")
+      (let ((cmd (plist-get proc-args :command)))
+        (expect cmd :to-equal '("osascript" "-l" "JavaScript")))
+      (expect 'process-send-string :to-have-been-called)
+      (expect 'process-send-eof :to-have-been-called))))
 
 ;;; Browser detection
 
