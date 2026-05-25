@@ -1,11 +1,11 @@
 ---
 title: navegosa.el - browser control from Emacs via JXA
-status: planned
+status: implementing
 created: 2025-05-25
 updated: 2025-05-25
 projects:
   - repo: agzam/navegosa.el
-    ref: (no commits yet)
+    ref: 5677f66
     paths: [navegosa.el, navegosa-tabs.el, navegosa-scripts.js]
 related: [agzam/doom.d:modules/custom/web-browsing/autoload/browser.el]
 ---
@@ -61,31 +61,40 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 
 ### Core (navegosa.el)
 
-- [planned] JXA runner with stdin piping
-- [planned] Browser detection with caching + defcustom override
-- [planned] JS file loading from package directory
-- [planned] `navegosa-get-tabs` - list all tabs (returns list of plists)
-- [planned] `navegosa-switch-tab` - completing-read tab switcher
-- [planned] `navegosa-close-tab` - close tab by index
-- [planned] `navegosa-copy-tab-link` - active tab URL to kill-ring
-- [planned] `navegosa-insert-link` - insert formatted link (org/md/plain) at point
-- [planned] `navegosa-grab-text` - full text content of active tab
-- [planned] `navegosa-tab-to-eww` - render active tab in eww
+- [done] JXA runner with stdin piping
+- [done] Browser detection with caching + defcustom override
+- [done] JS file loading from package directory
+- [done] `navegosa-get-tabs` - list all tabs (returns list of plists)
+- [done] `navegosa-switch-tab` - completing-read tab switcher
+- [done] `navegosa-close-tab` - close tab by index
+- [done] `navegosa-copy-tab-link` - active tab URL to kill-ring
+- [done] `navegosa-insert-link` - insert formatted link (org/md/plain) at point
+- [done] `navegosa-grab-text` - full text content of active tab
+- [done] `navegosa-tab-to-eww` - render active tab in eww
 
 ### Tab buffer (navegosa-tabs.el)
 
-- [planned] `navegosa-tabs-mode` - derived from org-mode, read-only
-- [planned] `navegosa-tabs` - entry command, renders tab list
-- [planned] Structure: top-level headings = windows, sub-headings = tabs
-- [planned] Properties: :URL:, :WINDOW-INDEX:, :TAB-INDEX:, :ACTIVE:
-- [planned] Keybindings: RET=switch, d=close, g=refresh, q=quit
+- [done] `navegosa-tabs-mode` - derived from org-mode, read-only
+- [done] `navegosa-tabs` - entry command, renders tab list
+- [done] Structure: top-level headings = windows, sub-headings = tabs
+- [done] Properties: :URL:, :WINDOW-INDEX:, :TAB-INDEX:, :ACTIVE:
+- [done] Keybindings: RET=switch, d=close, g=refresh, q=quit, o=browse-url
 
-### Tests
+### Tests (35 specs)
 
-- [planned] JS script loading (file exists, caches)
-- [planned] Argument serialization (quoting, special chars)
-- [planned] Tab data parsing (mock JSON to plist)
-- [planned] Org buffer rendering (given data -> verify structure)
+- [done] JS script loading (file exists, caches)
+- [done] Argument serialization (quoting, special chars, type rejection)
+- [done] JXA runner (object parsing, array parsing, error handling, empty output)
+- [done] Tab data parsing (mock JSON to plist)
+- [done] Org buffer rendering (grouping, heading counts, ACTIVE marker, properties, empty list)
+- [done] Tab-at-point extraction (level-2 heading, nil on level-1)
+- [done] Browser detection (defcustom priority, cache priority, reset)
+- [done] navegosa-copy-tab-link (kill-ring, error on no tab)
+- [done] navegosa-insert-link (org/md/plain format, notification count strip)
+- [done] navegosa-grab-text (non-interactive return, error on no content)
+- [done] navegosa-tabs-switch (correct args, error when not on tab)
+- [done] navegosa-tabs-close (confirm+close+refresh, decline does nothing)
+- [done] navegosa-tabs-browse-url (eww called with URL, error when not on tab)
 
 ## Deferred (post-v1)
 
@@ -128,15 +137,20 @@ Known issues in source:
 ## Progress
 
 Workspace:
-- agzam/navegosa.el @ no branch yet (scaffold only, no commits)
+- agzam/navegosa.el @ main (5677f66, clean, pushed)
+
+Confirmed:
+- All v1 features implemented and E2E tested against live Brave with 49 tabs
+- Browser detection returns "Brave Browser.app" (with .app suffix) - works fine with JXA
+- 35 buttercup specs pass (unit + mocked integration)
+- Byte-compilation clean
+- GHA runs on push/PR against Emacs 29.4 and 30.1
 
 Next actions:
-- Implement navegosa-scripts.js with core JXA functions
-- Implement navegosa.el core (runner, detection, commands)
-- Implement navegosa-tabs.el (Org buffer)
-- Write tests
-- Initial commit
+- Start on deferred features (tab groups, search across tabs, scroll-to-text)
+- Consider adding `openTab` to JS dispatch for programmatic tab creation
 
 ## Changelog
 
 - 2025-05-25: spec created from design session. V1 scope locked.
+- 2025-05-25: v1 implemented. All core + tabs features done. 35 tests. E2E verified. Pushed 5677f66.

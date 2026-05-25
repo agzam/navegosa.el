@@ -168,6 +168,150 @@
         (goto-char (point-min))
         (expect (navegosa-tabs--tab-at-point) :to-be nil)))))
 
+;;; Interactive commands (mocked)
+
+(describe "navegosa-copy-tab-link"
+  (it "copies URL to kill ring and returns it"
+    (spy-on 'navegosa--run
+            :and-return-value '(:url "https://example.com" :title "Example" :windowIndex 1 :tabIndex 1))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (let ((result (navegosa-copy-tab-link)))
+      (expect result :to-equal "https://example.com")
+      (expect (car kill-ring) :to-equal "https://example.com")))
+
+  (it "signals error when no active tab"
+    (spy-on 'navegosa--run :and-return-value nil)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (expect (navegosa-copy-tab-link) :to-throw 'user-error)))
+
+(describe "navegosa-insert-link"
+  (it "inserts org-mode link"
+    (spy-on 'navegosa--run
+            :and-return-value '(:url "https://example.com" :title "Example Page" :windowIndex 1 :tabIndex 1))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (with-temp-buffer
+      (org-mode)
+      (navegosa-insert-link)
+      (expect (buffer-string) :to-match "\\[\\[https://example.com\\]\\[Example Page\\]\\]")))
+
+  (it "inserts markdown link"
+    (spy-on 'navegosa--run
+            :and-return-value '(:url "https://example.com" :title "Example Page" :windowIndex 1 :tabIndex 1))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (with-temp-buffer
+      (let ((major-mode 'markdown-mode))
+        (navegosa-insert-link)
+        (expect (buffer-string) :to-equal "[Example Page](https://example.com)"))))
+
+  (it "inserts plain URL in fundamental mode"
+    (spy-on 'navegosa--run
+            :and-return-value '(:url "https://example.com" :title "Example Page" :windowIndex 1 :tabIndex 1))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (with-temp-buffer
+      (navegosa-insert-link)
+      (expect (buffer-string) :to-equal "https://example.com")))
+
+  (it "strips notification count from title"
+    (spy-on 'navegosa--run
+            :and-return-value '(:url "https://github.com" :title "(5) GitHub" :windowIndex 1 :tabIndex 1))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (with-temp-buffer
+      (org-mode)
+      (navegosa-insert-link)
+      (expect (buffer-string) :to-match "\\[GitHub\\]\\]"))))
+
+(describe "navegosa-grab-text"
+  (it "returns text string when called non-interactively"
+    (spy-on 'navegosa--run
+            :and-return-value '(:url "https://example.com" :title "Example" :content "Hello world"))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (expect (navegosa-grab-text) :to-equal "Hello world"))
+
+  (it "signals error when no content"
+    (spy-on 'navegosa--run :and-return-value nil)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (expect (navegosa-grab-text) :to-throw 'user-error)))
+
+(describe "navegosa-tabs-switch"
+  (it "calls activateTab with correct indices"
+    (let ((called-args nil))
+      (spy-on 'navegosa--run
+              :and-call-fake (lambda (fn &rest args)
+                               (setq called-args (cons fn args))
+                               '(:ok t)))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (let ((tabs '((:windowIndex 2 :tabIndex 3 :url "https://a.com" :title "Tab A" :active nil))))
+        (with-temp-buffer
+          (navegosa-tabs-mode)
+          (navegosa-tabs--render tabs)
+          (goto-char (point-min))
+          (re-search-forward "Tab A")
+          (navegosa-tabs-switch)
+          (expect called-args :to-equal '("activateTab" "Safari" 2 3))))))
+
+  (it "signals error when not on a tab heading"
+    (let ((tabs '((:windowIndex 1 :tabIndex 1 :url "https://a.com" :title "Tab A" :active nil))))
+      (with-temp-buffer
+        (navegosa-tabs-mode)
+        (navegosa-tabs--render tabs)
+        (goto-char (point-min)) ;; on Window heading
+        (expect (navegosa-tabs-switch) :to-throw 'user-error)))))
+
+(describe "navegosa-tabs-close"
+  (it "calls closeTab and refreshes on confirmation"
+    (let ((close-called nil))
+      (spy-on 'navegosa--run
+              :and-call-fake (lambda (fn &rest args)
+                               (when (equal fn "closeTab")
+                                 (setq close-called (cons fn args)))
+                               '(:ok t)))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'navegosa-get-tabs
+              :and-return-value '((:windowIndex 1 :tabIndex 1 :url "https://a.com" :title "Tab A" :active nil)))
+      (spy-on 'yes-or-no-p :and-return-value t)
+      (with-temp-buffer
+        (navegosa-tabs-mode)
+        (navegosa-tabs--render
+         '((:windowIndex 1 :tabIndex 1 :url "https://a.com" :title "Tab A" :active nil)))
+        (goto-char (point-min))
+        (re-search-forward "Tab A")
+        (navegosa-tabs-close)
+        (expect close-called :to-equal '("closeTab" "Safari" 1 1))
+        (expect 'yes-or-no-p :to-have-been-called))))
+
+  (it "does nothing when user declines"
+    (spy-on 'navegosa--run)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'yes-or-no-p :and-return-value nil)
+    (with-temp-buffer
+      (navegosa-tabs-mode)
+      (navegosa-tabs--render
+       '((:windowIndex 1 :tabIndex 1 :url "https://a.com" :title "Tab A" :active nil)))
+      (goto-char (point-min))
+      (re-search-forward "Tab A")
+      (navegosa-tabs-close)
+      (expect 'navegosa--run :not :to-have-been-called))))
+
+(describe "navegosa-tabs-browse-url"
+  (it "opens URL in eww"
+    (spy-on 'eww)
+    (let ((tabs '((:windowIndex 1 :tabIndex 1 :url "https://a.com" :title "Tab A" :active nil))))
+      (with-temp-buffer
+        (navegosa-tabs-mode)
+        (navegosa-tabs--render tabs)
+        (goto-char (point-min))
+        (re-search-forward "Tab A")
+        (navegosa-tabs-browse-url)
+        (expect 'eww :to-have-been-called-with "https://a.com"))))
+
+  (it "signals error when not on a tab"
+    (let ((tabs '((:windowIndex 1 :tabIndex 1 :url "https://a.com" :title "Tab A" :active nil))))
+      (with-temp-buffer
+        (navegosa-tabs-mode)
+        (navegosa-tabs--render tabs)
+        (goto-char (point-min))
+        (expect (navegosa-tabs-browse-url) :to-throw 'user-error)))))
+
 ;;; Browser detection
 
 (describe "navegosa--browser"
