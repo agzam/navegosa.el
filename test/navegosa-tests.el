@@ -31,6 +31,68 @@
   (it "rejects unsupported types"
     (expect (navegosa--to-js '(1 2 3)) :to-throw 'error)))
 
+;;; Script file location
+
+(describe "navegosa--scripts-file"
+  (it "finds the script in the same directory as the source"
+    (let* ((tmp-dir (file-truename (make-temp-file "navegosa-test-" t))))
+      (unwind-protect
+          (progn
+            (write-region "" nil (expand-file-name "navegosa.el" tmp-dir))
+            (write-region "// js" nil (expand-file-name "navegosa-scripts.js" tmp-dir))
+            (let ((load-file-name (expand-file-name "navegosa.el" tmp-dir)))
+              (expect (navegosa--scripts-file)
+                      :to-equal (expand-file-name "navegosa-scripts.js" tmp-dir))))
+        (delete-directory tmp-dir t))))
+
+  (it "follows symlinks to find the script in the source repo"
+    (let* ((source-dir (file-truename (make-temp-file "navegosa-src-" t)))
+           (build-dir (file-truename (make-temp-file "navegosa-build-" t))))
+      (unwind-protect
+          (progn
+            ;; Source repo has both .el and .js
+            (write-region "" nil (expand-file-name "navegosa.el" source-dir))
+            (write-region "// js" nil (expand-file-name "navegosa-scripts.js" source-dir))
+            ;; Build dir has only a symlink to the .el
+            (make-symbolic-link
+             (expand-file-name "navegosa.el" source-dir)
+             (expand-file-name "navegosa.el" build-dir))
+            (let ((load-file-name (expand-file-name "navegosa.el" build-dir)))
+              (expect (navegosa--scripts-file)
+                      :to-equal (expand-file-name "navegosa-scripts.js" source-dir))))
+        (delete-directory source-dir t)
+        (delete-directory build-dir t))))
+
+  (it "resolves via .el symlink when locate-library returns .elc"
+    ;; Simulates straight.el: build dir has a local .elc and a symlinked .el,
+    ;; but the .js file only exists in the source repo.
+    (let* ((source-dir (file-truename (make-temp-file "navegosa-src-" t)))
+           (build-dir (file-truename (make-temp-file "navegosa-build-" t))))
+      (unwind-protect
+          (progn
+            (write-region "" nil (expand-file-name "navegosa.el" source-dir))
+            (write-region "// js" nil (expand-file-name "navegosa-scripts.js" source-dir))
+            ;; Build dir: symlinked .el + local .elc (byte-compiled in place)
+            (make-symbolic-link
+             (expand-file-name "navegosa.el" source-dir)
+             (expand-file-name "navegosa.el" build-dir))
+            (write-region "" nil (expand-file-name "navegosa.elc" build-dir))
+            ;; locate-library returns the .elc - the actual failure scenario
+            (let ((load-file-name nil))
+              (spy-on 'locate-library
+                      :and-return-value (expand-file-name "navegosa.elc" build-dir))
+              (expect (navegosa--scripts-file)
+                      :to-equal (expand-file-name "navegosa-scripts.js" source-dir))))
+        (delete-directory source-dir t)
+        (delete-directory build-dir t))))
+
+  (it "errors when script file cannot be found"
+    (let ((tmp-dir (make-temp-file "navegosa-test-" t)))
+      (unwind-protect
+          (let ((load-file-name (expand-file-name "navegosa.el" tmp-dir)))
+            (expect (navegosa--scripts-file) :to-throw 'error))
+        (delete-directory tmp-dir t)))))
+
 ;;; Script loading
 
 (describe "navegosa--load-scripts"

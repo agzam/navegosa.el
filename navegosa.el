@@ -75,13 +75,29 @@ When `new-tab', open the URL in a new browser tab."
     (user-error "navegosa requires macOS")))
 
 (defun navegosa--scripts-file ()
-  "Locate navegosa-scripts.js relative to package directory."
-  (expand-file-name
-   "navegosa-scripts.js"
-   (file-name-directory
-    (or load-file-name
-        (locate-library "navegosa")
-        (error "Cannot find navegosa package directory")))))
+  "Locate navegosa-scripts.js relative to package directory.
+Follows symlinks so that package managers which only link .el files
+into a build directory (e.g., straight.el) resolve back to the
+source repo where the JS file lives.  Prefers the .el source over
+.elc for resolution since compiled files are generated in-place and
+are never symlinks."
+  (let* ((pkg-file (or load-file-name
+                       (locate-library "navegosa")
+                       (error "Cannot find navegosa package directory")))
+         ;; .elc files are byte-compiled in the build dir - never symlinks.
+         ;; The .el source is what package managers symlink, so prefer it.
+         (source-file (if (string-suffix-p ".elc" pkg-file)
+                          (let ((el (concat (file-name-sans-extension pkg-file) ".el")))
+                            (if (file-exists-p el) el pkg-file))
+                        pkg-file))
+         (script (expand-file-name
+                  "navegosa-scripts.js"
+                  (file-name-directory (file-truename source-file)))))
+    (if (file-exists-p script) script
+      (error "Cannot find navegosa-scripts.js in %s.\n\
+If your package manager copies .el files instead of symlinking,\n\
+add \"navegosa-scripts.js\" to its :files recipe"
+             (file-name-directory (file-truename source-file))))))
 
 (defun navegosa--load-scripts ()
   "Load and cache the JS scripts file."

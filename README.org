@@ -4,9 +4,9 @@
 
 Control web browsers directly from Emacs on macOS via JXA (JavaScript for Automation).
 
-From Spanish /navegar/ - to browse, to navigate.
+From Spanish /navegar/ - to browse + /OSA/ (Open Scripting Architecture)
 
-*macOS only.* JXA has no equivalent on other platforms.
+*macOS only.* OSA - JXA/Applescript has no equivalent on other platforms.
 
 ** Supported browsers
 
@@ -20,7 +20,7 @@ Any browser with a Standard Suite scripting dictionary:
 The default browser is auto-detected. Override with:
 
 #+begin_src emacs-lisp
-(setq navegosa-browser "Brave Browser")
+(setopt navegosa-browser "Brave Browser")
 #+end_src
 
 ** Installation
@@ -40,26 +40,31 @@ Clone the repo and add it to ~load-path~:
 (require 'navegosa)
 #+end_src
 
+** Important note
+You need to make sure the right permissions in place. Additionally, you may have to enable in the browser menu:
+
+*View* -> *Developer* -> *Allow JavaScript from Apple Events*
+
 ** Commands
 
-| Command                   | Description                                      |
-|---------------------------+--------------------------------------------------|
-| ~navegosa-switch-tab~     | Pick a tab via completing-read, switch to it      |
-| ~navegosa-close-tab~      | Pick a tab via completing-read, close it          |
-| ~navegosa-copy-tab-link~  | Copy active tab URL to kill ring                  |
-| ~navegosa-insert-link~    | Insert link to active tab (org/markdown/plain)    |
-| ~navegosa-grab-text~      | Get plain text content of active tab              |
-| ~navegosa-tab-to-eww~     | Render active tab content in eww                  |
-| ~navegosa-jump-to-link~   | Jump to a link on the page via completing-read    |
-| ~navegosa-tabs~           | Open Org-based tab manager buffer                 |
-| ~navegosa-reset~          | Clear caches (scripts, browser name)              |
+| Command                | Description                                    |
+|------------------------+------------------------------------------------|
+| ~navegosa-switch-tab~    | Pick a tab via completing-read, switch to it   |
+| ~navegosa-close-tab~     | Pick a tab via completing-read, close it       |
+| ~navegosa-copy-tab-link~ | Copy active tab URL to kill ring               |
+| ~navegosa-insert-link~   | Insert link to active tab (org/markdown/plain) |
+| ~navegosa-grab-text~     | Get plain text content of active tab           |
+| ~navegosa-tab-to-eww~    | Render active tab content in eww               |
+| ~navegosa-jump-to-link~  | Jump to a link on the page via completing-read |
+| ~navegosa-tabs~          | Open Org-based tab manager buffer              |
+| ~navegosa-reset~         | Clear caches (scripts, browser name)           |
 
 ** Tab manager
 
 ~navegosa-tabs~ opens an Org buffer listing all browser tabs grouped by window.
 
-| Key   | Action                           |
-|-------+----------------------------------|
+| Key | Action                           |
+|-----+----------------------------------|
 | ~RET~ | Switch to tab at point           |
 | ~d~   | Close tab at point (with prompt) |
 | ~g~   | Refresh                          |
@@ -70,10 +75,10 @@ Clone the repo and add it to ~load-path~:
 
 ~navegosa-jump-to-link~ collects links from the active browser tab, injects avy-style hint labels into the page, and presents candidates in Emacs. If ~consult~ is available, candidates preview with live highlighting in the browser as you move through the list. On selection, the link is clicked (same tab) or opened in a new tab.
 
-| Customization                   | Default    | Description                   |
-|---------------------------------+------------+-------------------------------|
-| ~navegosa-jump-links-scope~     | ~viewport~ | ~viewport~ or ~all~           |
-| ~navegosa-jump-links-action~    | ~same-tab~ | ~same-tab~ or ~new-tab~      |
+| Customization              | Default  | Description         |
+|----------------------------+----------+---------------------|
+| ~navegosa-jump-links-scope~  | ~viewport~ | ~viewport~ or ~all~     |
+| ~navegosa-jump-links-action~ | ~same-tab~ | ~same-tab~ or ~new-tab~ |
 
 ** Safari note
 
