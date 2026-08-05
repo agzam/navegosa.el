@@ -30,6 +30,7 @@ test: $(ELPA_DIR)
 	--eval "(setq buttercup-stack-frame-style 'omit)" \
 	-l navegosa.el \
 	-l navegosa-tabs.el \
+	-l navegosa-media.el \
 	-l test/navegosa-tests.el \
 	--funcall buttercup-run
 
@@ -47,14 +48,16 @@ check-compile: $(ELPA_DIR) check-autoloads
 	--eval "(setq byte-compile-error-on-warn t)" \
 	--eval "(add-to-list 'load-path \".\")" \
 	--eval "(byte-compile-file \"navegosa.el\")" \
-	--eval "(byte-compile-file \"navegosa-tabs.el\")"
+	--eval "(byte-compile-file \"navegosa-tabs.el\")" \
+	--eval "(byte-compile-file \"navegosa-media.el\")"
 
 compile: $(ELPA_DIR)
 	@echo "Byte-compiling package files..."
 	$(EMACS_BATCH) \
 	--eval "(add-to-list 'load-path \".\")" \
 	--eval "(byte-compile-file \"navegosa.el\")" \
-	--eval "(byte-compile-file \"navegosa-tabs.el\")"
+	--eval "(byte-compile-file \"navegosa-tabs.el\")" \
+	--eval "(byte-compile-file \"navegosa-media.el\")"
 
 clean:
 	@echo "Cleaning compiled files..."

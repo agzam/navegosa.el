@@ -2,11 +2,11 @@
 title: navegosa.el - browser control from Emacs via JXA
 status: implementing
 created: 2025-05-25
-updated: 2025-05-25
+updated: 2026-08-05
 projects:
   - repo: agzam/navegosa.el
-    ref: 5677f66
-    paths: [navegosa.el, navegosa-tabs.el, navegosa-scripts.js]
+    ref: main
+    paths: [navegosa.el, navegosa-tabs.el, navegosa-media.el, navegosa-scripts.js]
 related: [agzam/doom.d:modules/custom/web-browsing/autoload/browser.el]
 ---
 
@@ -109,8 +109,38 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - [done] 10 new tests (candidate formatting, scope/action dispatch, cleanup on quit, async runner)
 - [done] Fix existing tests for Emacs 29.4 buttercup compatibility (plist-get in expect, ensure-macos on Linux CI)
 
+## V3: Media control
+
+- [done] `navegosa-media.el` - control video playback in a browser tab: play/pause, seek, speed, volume, mute, subtitles, next/prev, timestamped URL copy, status echo
+- [done] JS: `getMediaTabs(browser, urlPattern)` - URL-prefiltered tab listing; never executes JS into tabs (a discarded Memory Saver tab hangs `tab.execute` forever)
+- [done] JS: `mediaCommand(browser, w, t, cmd, arg)` - single round-trip: pick most relevant `<video>` (playing beats paused, then largest on-screen), apply command, return full state `{time, duration, rate, paused, volume, muted, url, title, warning?}`; `mediaStatus` as the read-only alias
+- [done] Commands: playPause, seekBy, seekTo, rateMul, rateSet (rate clamped 0.25-5x), volumeBy (clamped 0-1, volume-up unmutes), muteToggle, subsToggle, next, prev
+- [done] subsToggle clicks `.ytp-subtitles-button` when present (YouTube), otherwise cycles `video.textTracks` modes
+- [done] theaterToggle clicks `.ytp-size-button` (E2E: theater attribute cycles on a visible tab; hidden tabs apply it when shown)
+- [done] `windowFullscreenToggle(browser, w)` - macOS window fullscreen via System Events AXFullScreen; needs Accessibility permission for osascript, reports the grant path otherwise. Player fullscreen is unreachable: synthetic clicks carry no user activation, Fullscreen API fires `fullscreenerror` (E2E-verified)
+- [done] Timeout-guarded runner: every media JXA call is killed after `navegosa-media-timeout` (default 3s); async with result callback plus a sync wrapper
+- [done] Tab cache + locate: candidates from `navegosa-media-url-patterns` (JS regexes, joined with `|`), `completing-read` on several, auto-pick first in retry context; on command failure invalidate cache, re-locate once, retry once
+- [done] Echo from every command's returned state: `12:34/56:07 1.5x vol:80% [muted] [paused] Title`
+- [done] `navegosa-media-copy-url` - `t=` query param for YouTube URLs, `#t=` media fragment for the rest
+- [done] `navegosa-media-select-tab` always prompts (single candidate shows as the one choice) and brings the pick up in the browser
+- [done] `navegosa-media-open-url` / JS `openMediaTab` - open a URL as the frontmost window's front tab and control it; tab switched in-window without activating the browser app, so Emacs keeps focus and playback starts as long as the window is visible on screen (E2E-verified)
+- [done] Core refactor: `navegosa--build-script` + `navegosa--parse-result` extracted from `navegosa--run`, shared with the media runner
+- [done] 33 new tests: formatting, URL stamping, locate/cache, dispatch args, retry-once, real-subprocess timeout guard (osascript swapped for sleep/sh so they run on Linux CI)
+- [done] E2E against live Brave: full command matrix on a scratch tab, subtitles on a captioned video, timeout guard against a genuinely discarded tab, elisp echo/copy-url/retry flows
+
+### Media findings (E2E, live Brave)
+
+- Apple-Events JS runs in an isolated world: page JS (YouTube `movie_player` API) is unreachable; DOM control (video element + `.ytp-*` buttons) suffices.
+- A never-focused background YouTube tab defers media load: video element exists with readyState 0, `play()` is accepted but no data loads until the tab becomes visible once. Distinct error for it: "Video not loaded - activate the tab once to start it". `navegosa-media-open-tab` is the escape hatch.
+- `next` navigates SPA-style; once the page has been visible, playback continues in a background tab and the new video starts unmuted (muted state does not survive navigation).
+- `prev` (`.ytp-prev-button`) is inert outside playlist/watch-history context - YouTube behavior, mirrors mpv playlist-prev semantics.
+- In-page command latency 12-26ms; the ~150ms total round trip is dominated by osascript process spawn.
+- Auto-relocate picks the first candidate, which can itself be a discarded tab; the guard turns that into a clean 3s failure, `navegosa-media-select-tab` is the manual override.
+
 ## Deferred
 
+- Media: skip known-bad candidates on retry; prefer :active tab in auto-locate
+- Media: disambiguation when several tabs are actually playing (probe candidates, completing-read)
 - Tab groups (Chrome/Brave expose via JXA; Safari doesn't; Arc has "spaces" with thin JXA)
 - Search text across all tabs (execute JS in each tab, collect matches)
 - Scroll-to-text / consult-line style live search (latency concern: ~50-100ms per osascript call, needs debounce ~200-300ms or grab-text-then-search-locally approach)
@@ -149,18 +179,19 @@ Known issues in source:
 ## Progress
 
 Workspace:
-- agzam/navegosa.el @ main (5677f66, clean, pushed)
+- agzam/navegosa.el @ main (V3 pushed 2026-08-05)
 
 Confirmed:
 - All v1 features implemented and E2E tested against live Brave with 49 tabs
 - V2 jump-to-link E2E tested: link collection, hint injection, highlight, cleanup, clickLink all verified against live browser
+- V3 media control implemented and E2E tested against live Brave: full command matrix, timeout guard against a real discarded tab, elisp echo/copy-url/retry flows
 - Browser detection returns "Brave Browser.app" (with .app suffix) - works fine with JXA
-- 45 buttercup specs pass (unit + mocked integration)
-- Byte-compilation clean
+- 82 buttercup specs pass (unit + mocked integration + real-subprocess timeout guard)
+- Byte-compilation clean (navegosa.el, navegosa-tabs.el, navegosa-media.el)
 - GHA runs on push/PR against Emacs 29.4 and 30.1
 
 Next actions:
-- Start on deferred features (tab groups, search across tabs, scroll-to-text)
+- Start on deferred features (media retry refinements, tab groups, search across tabs)
 - Jump-to-link: add keybinding to toggle same-tab/new-tab from within completing-read
 
 ## Changelog
@@ -168,3 +199,4 @@ Next actions:
 - 2025-05-25: spec created from design session. V1 scope locked.
 - 2025-05-25: v1 implemented. All core + tabs features done. 35 tests. E2E verified. Pushed 5677f66.
 - 2025-05-25: v2 jump-to-link. Hint overlays, consult live highlight, async runner, 10 new tests, 29.4 test fixes.
+- 2026-08-05: v3 media control. navegosa-media.el, getMediaTabs/mediaCommand/mediaStatus JS, timeout-guarded runner, 33 new tests, live E2E incl. discarded-tab guard. Version 0.3.0.

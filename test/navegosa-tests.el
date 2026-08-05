@@ -10,6 +10,7 @@
 (require 'buttercup)
 (require 'navegosa)
 (require 'navegosa-tabs)
+(require 'navegosa-media)
 (require 'cl-lib)
 
 ;;; Serialization
@@ -530,5 +531,378 @@
       (navegosa-reset)
       (expect navegosa--scripts-cache :to-be nil)
       (expect navegosa--browser-cache :to-be nil))))
+
+;;; Script building
+
+(describe "navegosa--build-script"
+  (it "appends a JSON.stringify dispatch call to the JS body"
+    (let ((navegosa--scripts-cache "const Navegosa = {};"))
+      (expect (navegosa--build-script "mediaCommand" '("Safari" 1 2 "seekBy" -5))
+              :to-equal
+              "const Navegosa = {};\nJSON.stringify(Navegosa.mediaCommand(\"Safari\", 1, 2, \"seekBy\", -5))"))))
+
+;;; Media: formatting
+
+(describe "navegosa-media--url-pattern"
+  (it "joins patterns with |"
+    (let ((navegosa-media-url-patterns '("youtube\\.com/watch" "vimeo\\.com")))
+      (expect (navegosa-media--url-pattern)
+              :to-equal "youtube\\.com/watch|vimeo\\.com"))))
+
+(describe "navegosa-media--format-time"
+  (it "formats minutes and seconds"
+    (expect (navegosa-media--format-time 65) :to-equal "1:05")
+    (expect (navegosa-media--format-time 0) :to-equal "0:00"))
+
+  (it "formats hours"
+    (expect (navegosa-media--format-time 3725) :to-equal "1:02:05"))
+
+  (it "returns live for nil (Infinity duration serializes to null)"
+    (expect (navegosa-media--format-time nil) :to-equal "live")))
+
+(describe "navegosa-media--format-state"
+  (it "shows position, rate, volume and stripped title"
+    (let ((s (navegosa-media--format-state
+              '(:time 754.3 :duration 3367 :rate 1.5 :paused nil
+                :volume 0.8 :muted nil :title "Some Video - YouTube"))))
+      (expect s :to-match "12:34/56:07")
+      (expect s :to-match "1.5x")
+      (expect s :to-match "vol:80%")
+      (expect s :to-match "Some Video")
+      (expect s :not :to-match "YouTube")
+      (expect s :not :to-match "paused")))
+
+  (it "omits rate at 1x"
+    (expect (navegosa-media--format-state '(:time 1 :duration 2 :rate 1 :volume 0.5))
+            :not :to-match "x"))
+
+  (it "marks paused and muted"
+    (let ((s (navegosa-media--format-state
+              '(:time 0 :duration 10 :rate 1 :paused t :muted t :volume 0))))
+      (expect s :to-match "\\[paused\\]")
+      (expect s :to-match "\\[muted\\]")))
+
+  (it "includes command warnings"
+    (expect (navegosa-media--format-state '(:time 0 :duration 10 :warning "no subtitles"))
+            :to-match "(no subtitles)")))
+
+(describe "navegosa-media--timestamped-url"
+  (it "appends t= to a bare watch URL"
+    (expect (navegosa-media--timestamped-url "https://www.youtube.com/watch?v=abc" 754.9)
+            :to-equal "https://www.youtube.com/watch?v=abc&t=754s"))
+
+  (it "replaces an existing t= parameter"
+    (expect (navegosa-media--timestamped-url "https://www.youtube.com/watch?v=abc&t=30s" 60)
+            :to-equal "https://www.youtube.com/watch?v=abc&t=60s"))
+
+  (it "replaces t= when it is the first parameter"
+    (expect (navegosa-media--timestamped-url "https://www.youtube.com/watch?t=30s&v=abc" 60)
+            :to-equal "https://www.youtube.com/watch?v=abc&t=60s"))
+
+  (it "handles youtu.be short links"
+    (expect (navegosa-media--timestamped-url "https://youtu.be/abc" 90)
+            :to-equal "https://youtu.be/abc?t=90s")
+    (expect (navegosa-media--timestamped-url "https://youtu.be/abc?t=5s" 90)
+            :to-equal "https://youtu.be/abc?t=90s"))
+
+  (it "uses a media fragment for non-YouTube URLs"
+    (expect (navegosa-media--timestamped-url "https://vimeo.com/123" 90)
+            :to-equal "https://vimeo.com/123#t=90s"))
+
+  (it "drops an existing fragment"
+    (expect (navegosa-media--timestamped-url "https://vimeo.com/123#t=5s" 90)
+            :to-equal "https://vimeo.com/123#t=90s")))
+
+;;; Media: tab discovery
+
+(describe "navegosa-media--locate"
+  (before-each (setq navegosa-media--tab nil))
+  (after-each (setq navegosa-media--tab nil))
+
+  (it "errors when no candidates"
+    (spy-on 'navegosa--run :and-return-value nil)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (expect (navegosa-media--locate) :to-throw 'user-error))
+
+  (it "caches a single candidate without prompting"
+    (spy-on 'navegosa--run
+            :and-return-value
+            '((:windowIndex 1 :tabIndex 3 :url "https://www.youtube.com/watch?v=x"
+               :title "Vid" :active nil)))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'completing-read)
+    (let ((tab (navegosa-media--locate)))
+      (expect (plist-get tab :tabIndex) :to-equal 3)
+      (expect navegosa-media--tab :to-equal tab)
+      (expect 'completing-read :not :to-have-been-called)))
+
+  (it "prompts among several candidates"
+    (spy-on 'navegosa--run
+            :and-return-value
+            '((:windowIndex 1 :tabIndex 1 :url "https://youtu.be/a" :title "A" :active nil)
+              (:windowIndex 2 :tabIndex 5 :url "https://youtu.be/b" :title "B" :active nil)))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'completing-read :and-return-value "B | https://youtu.be/b")
+    (let ((tab (navegosa-media--locate)))
+      (expect (plist-get tab :tabIndex) :to-equal 5)))
+
+  (it "auto-picks the first candidate when told to"
+    (spy-on 'navegosa--run
+            :and-return-value
+            '((:windowIndex 1 :tabIndex 1 :url "https://youtu.be/a" :title "A" :active nil)
+              (:windowIndex 2 :tabIndex 5 :url "https://youtu.be/b" :title "B" :active nil)))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'completing-read)
+    (let ((tab (navegosa-media--locate 'auto)))
+      (expect (plist-get tab :tabIndex) :to-equal 1)
+      (expect 'completing-read :not :to-have-been-called)))
+
+  (it "prompt mode offers even a single candidate in the minibuffer"
+    (spy-on 'navegosa--run
+            :and-return-value
+            '((:windowIndex 1 :tabIndex 3 :url "https://youtu.be/a" :title "A" :active nil)))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'completing-read :and-return-value "A | https://youtu.be/a")
+    (let ((tab (navegosa-media--locate 'prompt)))
+      (expect 'completing-read :to-have-been-called)
+      (expect (plist-get tab :tabIndex) :to-equal 3)))
+
+  (it "passes the joined url pattern to getMediaTabs"
+    (let ((navegosa-media-url-patterns '("a" "b"))
+          (call nil))
+      (spy-on 'navegosa--run
+              :and-call-fake
+              (lambda (fn &rest args)
+                (setq call (cons fn args))
+                '((:windowIndex 1 :tabIndex 1 :url "u" :title "t" :active nil))))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (navegosa-media--locate)
+      (expect call :to-equal '("getMediaTabs" "Safari" "a|b")))))
+
+(describe "navegosa-media--ensure-tab"
+  (it "uses the cache without re-locating"
+    (let ((navegosa-media--tab '(:windowIndex 1 :tabIndex 2)))
+      (spy-on 'navegosa--run)
+      (expect (navegosa-media--ensure-tab) :to-equal '(:windowIndex 1 :tabIndex 2))
+      (expect 'navegosa--run :not :to-have-been-called))))
+
+;;; Media: command dispatch
+
+(describe "navegosa-media--dispatch"
+  (before-each
+    (setq navegosa-media--tab
+          '(:windowIndex 1 :tabIndex 2
+            :url "https://www.youtube.com/watch?v=x" :title "Vid")))
+  (after-each (setq navegosa-media--tab nil))
+
+  (it "sends mediaCommand with cmd and arg and echoes the returned state"
+    (let ((sent nil))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'navegosa-media--call-async
+              :and-call-fake
+              (lambda (fn args callback)
+                (setq sent (list fn args))
+                (funcall callback
+                         '(:time 10 :duration 100 :rate 1 :paused nil
+                           :volume 1 :muted nil :title "Vid")
+                         nil)))
+      (spy-on 'message)
+      (navegosa-media--dispatch "seekBy" -5)
+      (expect sent :to-equal '("mediaCommand" ("Safari" 1 2 "seekBy" -5)))
+      (expect 'message :to-have-been-called)))
+
+  (it "sends mediaStatus for the status command"
+    (let ((sent nil))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'navegosa-media--call-async
+              :and-call-fake
+              (lambda (fn args callback)
+                (setq sent (list fn args))
+                (funcall callback '(:time 1) nil)))
+      (spy-on 'message)
+      (navegosa-media--dispatch "status" nil)
+      (expect sent :to-equal '("mediaStatus" ("Safari" 1 2)))))
+
+  (it "invalidates cache, re-locates and retries exactly once on failure"
+    (let ((calls 0))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'navegosa-media--call-async
+              :and-call-fake
+              (lambda (_fn _args callback)
+                (setq calls (1+ calls))
+                (funcall callback nil "boom")))
+      (spy-on 'navegosa-media--locate
+              :and-call-fake
+              (lambda (&optional _auto)
+                (setq navegosa-media--tab '(:windowIndex 9 :tabIndex 9))))
+      (spy-on 'message)
+      (navegosa-media--dispatch "playPause" nil)
+      (expect calls :to-equal 2)
+      (expect 'navegosa-media--locate :to-have-been-called-with 'auto)
+      (expect 'message :to-have-been-called-with "navegosa-media: %s" "boom")))
+
+  (it "reports when re-locating finds nothing"
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'navegosa-media--call-async
+            :and-call-fake (lambda (_fn _args callback) (funcall callback nil "boom")))
+    (spy-on 'navegosa-media--locate
+            :and-call-fake
+            (lambda (&optional _auto) (user-error "navegosa-media: no media tabs open")))
+    (spy-on 'message)
+    (navegosa-media--dispatch "playPause" nil)
+    (expect 'message :to-have-been-called-with
+            "%s" "navegosa-media: no media tabs open")))
+
+(describe "navegosa-media commands"
+  (before-each (spy-on 'navegosa-media--dispatch))
+
+  (it "seek commands scale by step and prefix arg"
+    (let ((navegosa-media-seek-step 5))
+      (navegosa-media-seek-forward)
+      (expect 'navegosa-media--dispatch :to-have-been-called-with "seekBy" 5)
+      (navegosa-media-seek-backward 3)
+      (expect 'navegosa-media--dispatch :to-have-been-called-with "seekBy" -15)))
+
+  (it "speed commands multiply by step"
+    (let ((navegosa-media-speed-step 2.0))
+      (navegosa-media-speed-up)
+      (expect 'navegosa-media--dispatch :to-have-been-called-with "rateMul" 2.0)
+      (navegosa-media-speed-down)
+      (expect 'navegosa-media--dispatch :to-have-been-called-with "rateMul" 0.5)
+      (navegosa-media-speed-reset)
+      (expect 'navegosa-media--dispatch :to-have-been-called-with "rateSet" 1)))
+
+  (it "volume commands step by volume-step"
+    (let ((navegosa-media-volume-step 0.2))
+      (navegosa-media-volume-up)
+      (expect 'navegosa-media--dispatch :to-have-been-called-with "volumeBy" 0.2)
+      (navegosa-media-volume-down)
+      (expect 'navegosa-media--dispatch :to-have-been-called-with "volumeBy" -0.2)))
+
+  (it "toggles and status dispatch their commands"
+    (navegosa-media-play-pause)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "playPause" nil)
+    (navegosa-media-mute-toggle)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "muteToggle" nil)
+    (navegosa-media-subs-toggle)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "subsToggle" nil)
+    (navegosa-media-next)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "next" nil)
+    (navegosa-media-prev)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "prev" nil)
+    (navegosa-media-status)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "status" nil)
+    (navegosa-media-seek-to 42)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "seekTo" 42)
+    (navegosa-media-theater-toggle)
+    (expect 'navegosa-media--dispatch :to-have-been-called-with "theaterToggle" nil)))
+
+(describe "navegosa-media-fullscreen-toggle"
+  (before-each
+    (setq navegosa-media--tab '(:windowIndex 2 :tabIndex 7)))
+  (after-each (setq navegosa-media--tab nil))
+
+  (it "toggles fullscreen on the media tab's window"
+    (let ((sent nil))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'navegosa-media--call-async
+              :and-call-fake
+              (lambda (fn args callback)
+                (setq sent (list fn args))
+                (funcall callback '(:ok t :fullscreen t) nil)))
+      (spy-on 'message)
+      (navegosa-media-fullscreen-toggle)
+      (expect sent :to-equal '("windowFullscreenToggle" ("Safari" 2)))
+      (expect 'message :to-have-been-called-with "Fullscreen: %s" "on")))
+
+  (it "surfaces the accessibility-permission error"
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'navegosa-media--call-async
+            :and-call-fake
+            (lambda (_fn _args callback)
+              (funcall callback nil "needs Accessibility permission")))
+    (spy-on 'message)
+    (navegosa-media-fullscreen-toggle)
+    (expect 'message :to-have-been-called-with
+            "navegosa-media: %s" "needs Accessibility permission")))
+
+(describe "navegosa-media-copy-url"
+  (it "kills a timestamped URL built from returned state"
+    (spy-on 'navegosa-media--dispatch
+            :and-call-fake
+            (lambda (_cmd _arg &optional handler _no-retry)
+              (funcall handler '(:time 90.7 :url "https://www.youtube.com/watch?v=x"
+                                 :title "Vid"))))
+    (spy-on 'message)
+    (navegosa-media-copy-url)
+    (expect (car kill-ring) :to-equal "https://www.youtube.com/watch?v=x&t=90s")))
+
+(describe "navegosa-media-open-tab"
+  (it "activates the cached tab"
+    (let ((navegosa-media--tab '(:windowIndex 2 :tabIndex 7)))
+      (spy-on 'navegosa--run)
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (navegosa-media-open-tab)
+      (expect 'navegosa--run :to-have-been-called-with "activateTab" "Safari" 2 7))))
+
+(describe "navegosa-media-select-tab"
+  (after-each (setq navegosa-media--tab nil))
+
+  (it "prompts and brings the picked tab up in the browser"
+    (spy-on 'navegosa-media--locate
+            :and-call-fake
+            (lambda (&optional _mode)
+              (setq navegosa-media--tab '(:windowIndex 1 :tabIndex 5 :title "Vid"))))
+    (spy-on 'navegosa--run)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (navegosa-media-select-tab)
+    (expect 'navegosa-media--locate :to-have-been-called-with 'prompt)
+    (expect 'navegosa--run :to-have-been-called-with "activateTab" "Safari" 1 5)))
+
+(describe "navegosa-media-open-url"
+  (after-each (setq navegosa-media--tab nil))
+
+  (it "opens the url via openMediaTab and controls the new tab"
+    (spy-on 'navegosa-media--call-sync
+            :and-return-value '(:windowIndex 1 :tabIndex 9
+                                :url "https://youtu.be/x" :title ""))
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (navegosa-media-open-url "https://youtu.be/x")
+    (expect 'navegosa-media--call-sync :to-have-been-called-with
+            "openMediaTab" "Safari" "https://youtu.be/x")
+    (expect (plist-get navegosa-media--tab :tabIndex) :to-equal 9)))
+
+;;; Media: guarded runner (real subprocesses, osascript swapped out)
+
+(describe "navegosa-media--call-sync"
+  :var (navegosa--scripts-cache)
+
+  (before-each
+    (setq navegosa--scripts-cache "const Navegosa = {};")
+    (spy-on 'navegosa--ensure-macos))
+
+  (it "kills the process and errors after the timeout"
+    ;; sleep simulates the discarded-tab hang the guard exists for:
+    ;; tab.execute never returns.
+    (let ((orig (symbol-function 'make-process))
+          (navegosa-media-timeout 0.3))
+      (spy-on 'make-process
+              :and-call-fake
+              (lambda (&rest kw)
+                (apply orig (plist-put kw :command '("sleep" "30")))))
+      (expect (navegosa-media--call-sync "mediaStatus" "Safari" 1 1)
+              :to-throw 'user-error)))
+
+  (it "returns the parsed result when the process responds"
+    (let ((orig (symbol-function 'make-process)))
+      (spy-on 'make-process
+              :and-call-fake
+              (lambda (&rest kw)
+                (apply orig
+                       (plist-put kw :command
+                                  '("sh" "-c" "cat >/dev/null; printf '{\"time\":5,\"paused\":true}'")))))
+      (let ((result (navegosa-media--call-sync "mediaStatus" "Safari" 1 1)))
+        (expect (plist-get result :time) :to-equal 5)
+        (expect (plist-get result :paused) :to-equal t)))))
 
 ;;; navegosa-tests.el ends here

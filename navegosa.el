@@ -5,7 +5,7 @@
 ;; Author: Ag Ibragimov <agzam.ibragimov@gmail.com>
 ;; Maintainer: Ag Ibragimov <agzam.ibragimov@gmail.com>
 ;; Created: May 25, 2026
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Keywords: tools convenience
 ;; Homepage: https://github.com/agzam/navegosa.el
 ;; Package-Requires: ((emacs "29.1"))
@@ -116,50 +116,54 @@ add \"navegosa-scripts.js\" to its :files recipe"
    ((null value) "null")
    (t (error "Cannot serialize %S to JavaScript" value))))
 
+(defun navegosa--build-script (fn args)
+  "Return full JXA script: JS body plus a Navegosa.FN(ARGS) dispatch call."
+  (format "%s\nJSON.stringify(Navegosa.%s(%s))"
+          (navegosa--load-scripts)
+          fn
+          (mapconcat #'navegosa--to-js args ", ")))
+
+(defun navegosa--parse-result (output exit-code)
+  "Parse JXA OUTPUT given EXIT-CODE, return elisp data.
+Signals `user-error' on non-zero EXIT-CODE or an {error: ...} response.
+Returns nil on empty OUTPUT."
+  (if (not (zerop exit-code))
+      (user-error "navegosa: JXA error (exit %d): %s" exit-code output)
+    (when (< 0 (length output))
+      (let ((result (json-parse-string
+                     output
+                     :object-type 'plist
+                     :array-type 'list
+                     :null-object nil
+                     :false-object nil)))
+        (when (and (consp result) (plist-member result :error))
+          (user-error "navegosa: %s" (plist-get result :error)))
+        result))))
+
 (defun navegosa--run (fn &rest args)
   "Call Navegosa.FN with ARGS via JXA, return parsed result.
 Loads the JS scripts file, appends a JSON.stringify dispatch call,
 pipes the whole thing to osascript via stdin, and parses the JSON output."
   (navegosa--ensure-macos)
-  (let* ((scripts (navegosa--load-scripts))
-         (js-args (mapconcat #'navegosa--to-js args ", "))
-         (call (format "\nJSON.stringify(Navegosa.%s(%s))" fn js-args))
-         (full-script (concat scripts call)))
-    (with-temp-buffer
-      (insert full-script)
-      (let ((exit-code
-             (call-process-region
-              (point-min) (point-max) "osascript"
-              t t nil "-l" "JavaScript")))
-        (let ((output (string-trim (buffer-string))))
-          (if (not (zerop exit-code))
-              (user-error "navegosa: JXA error (exit %d): %s" exit-code output)
-            (when (< 0 (length output))
-              (let ((result (json-parse-string
-                             output
-                             :object-type 'plist
-                             :array-type 'list
-                             :null-object nil
-                             :false-object nil)))
-                (when (and (consp result) (plist-member result :error))
-                  (user-error "navegosa: %s" (plist-get result :error)))
-                result))))))))
+  (with-temp-buffer
+    (insert (navegosa--build-script fn args))
+    (let ((exit-code
+           (call-process-region
+            (point-min) (point-max) "osascript"
+            t t nil "-l" "JavaScript")))
+      (navegosa--parse-result (string-trim (buffer-string)) exit-code))))
 
 (defun navegosa--run-async (fn &rest args)
   "Call Navegosa.FN with ARGS via JXA asynchronously.
 Fire-and-forget: does not block Emacs, discards output."
   (navegosa--ensure-macos)
-  (let* ((scripts (navegosa--load-scripts))
-         (js-args (mapconcat #'navegosa--to-js args ", "))
-         (call (format "\nJSON.stringify(Navegosa.%s(%s))" fn js-args))
-         (full-script (concat scripts call))
-         (proc (make-process
-                :name "navegosa-async"
-                :command '("osascript" "-l" "JavaScript")
-                :connection-type 'pipe
-                :noquery t
-                :sentinel #'ignore)))
-    (process-send-string proc full-script)
+  (let ((proc (make-process
+               :name "navegosa-async"
+               :command '("osascript" "-l" "JavaScript")
+               :connection-type 'pipe
+               :noquery t
+               :sentinel #'ignore)))
+    (process-send-string proc (navegosa--build-script fn args))
     (process-send-eof proc)))
 
 ;;;; Browser detection

@@ -1,5 +1,11 @@
 #+title: Changelog
 
+* 0.3.0 (2026-08-05)
+- Add =navegosa-media.el= - media playback control in browser tabs: play/pause, seek, speed, volume, mute, subtitles, next/prev, theater mode, window fullscreen, timestamped URL copy, status echo.
+- Tab discovery by URL prefilter (~navegosa-media-url-patterns~) with cache and retry-once; every JXA call deadline-guarded (~navegosa-media-timeout~) against discarded-tab hangs.
+- ~navegosa-media-open-url~ opens a URL as the browser's front tab (no focus steal) and controls it; ~navegosa-media-select-tab~ always prompts and shows the picked tab.
+- Extract ~navegosa--build-script~ / ~navegosa--parse-result~ shared runner helpers.
+
 * 0.2.0 (2026-05-25)
 - Add ~navegosa-jump-to-link~ - jump to page links with hint overlays and live highlighting (consult integration).
 - Add async JXA runner (~navegosa--run-async~) for non-blocking fire-and-forget calls.

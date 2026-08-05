@@ -1,8 +1,7 @@
 #+title: navegosa.el
-#+author: Ag Ibragimov
 [[https://github.com/agzam/navegosa.el/actions/workflows/run-tests.yml][https://github.com/agzam/navegosa.el/actions/workflows/run-tests.yml/badge.svg]]
 
-Control web browsers directly from Emacs on macOS via JXA (JavaScript for Automation).
+Control web browser directly from Emacs on macOS.
 
 From Spanish /navegar/ - to browse + /OSA/ (Open Scripting Architecture)
 
@@ -59,6 +58,8 @@ You need to make sure the right permissions in place. Additionally, you may have
 | ~navegosa-tabs~          | Open Org-based tab manager buffer              |
 | ~navegosa-reset~         | Clear caches (scripts, browser name)           |
 
+Media playback commands (~navegosa-media-*~) are listed in [[#media-control][Media control]].
+
 ** Tab manager
 
 ~navegosa-tabs~ opens an Org buffer listing all browser tabs grouped by window.
@@ -79,6 +80,66 @@ You need to make sure the right permissions in place. Additionally, you may have
 |----------------------------+----------+---------------------|
 | ~navegosa-jump-links-scope~  | ~viewport~ | ~viewport~ or ~all~     |
 | ~navegosa-jump-links-action~ | ~same-tab~ | ~same-tab~ or ~new-tab~ |
+
+** Media control
+:PROPERTIES:
+:CUSTOM_ID: media-control
+:END:
+
+=navegosa-media.el= controls video playback (YouTube, Vimeo, etc.) in a
+browser tab without leaving Emacs. Requires JavaScript from Apple
+Events (see below). Works on background tabs - no focus stealing.
+
+| Command                          | Description                                |
+|----------------------------------+--------------------------------------------|
+| ~navegosa-media-play-pause~        | Toggle play/pause                          |
+| ~navegosa-media-seek-forward~      | Seek forward (prefix arg multiplies)       |
+| ~navegosa-media-seek-backward~     | Seek backward (prefix arg multiplies)      |
+| ~navegosa-media-seek-to~           | Seek to absolute position (seconds)        |
+| ~navegosa-media-speed-up~          | Increase playback rate                     |
+| ~navegosa-media-speed-down~        | Decrease playback rate                     |
+| ~navegosa-media-speed-reset~       | Back to 1x                                 |
+| ~navegosa-media-volume-up~         | Raise volume (unmutes)                     |
+| ~navegosa-media-volume-down~       | Lower volume                               |
+| ~navegosa-media-mute-toggle~       | Toggle mute                                |
+| ~navegosa-media-subs-toggle~       | Toggle subtitles (YT button or textTracks) |
+| ~navegosa-media-next~              | Next video (YouTube)                       |
+| ~navegosa-media-prev~              | Previous video (YouTube, playlists only)   |
+| ~navegosa-media-theater-toggle~    | Toggle YouTube theater mode                |
+| ~navegosa-media-fullscreen-toggle~ | Toggle macOS window fullscreen             |
+| ~navegosa-media-copy-url~          | Copy URL timestamped at current position   |
+| ~navegosa-media-status~            | Echo position/rate/volume/title            |
+| ~navegosa-media-select-tab~        | Pick a media tab (always prompts), show it |
+| ~navegosa-media-open-tab~          | Activate the controlled tab in the browser |
+| ~navegosa-media-open-url~          | Open a URL as front tab and control it     |
+
+Every command echoes the resulting state, e.g. =12:34/56:07 1.5x
+vol:80% Title=.
+
+The controlled tab is found by URL (never by probing tabs with JS - a
+tab discarded by Memory Saver would hang the call) and cached.  When a
+command fails, the cache is invalidated and the command retried once
+against a freshly located tab.  Every call is deadline-guarded.
+
+| Customization               | Default             | Description                     |
+|-----------------------------+---------------------+---------------------------------|
+| ~navegosa-media-url-patterns~ | youtube, vimeo, ... | JS regexes for media tab URLs   |
+| ~navegosa-media-seek-step~    | ~5~                   | Seconds per seek                |
+| ~navegosa-media-speed-step~   | ~1.1~                 | Rate multiplier per step        |
+| ~navegosa-media-volume-step~  | ~0.1~                 | Volume step (0.0-1.0)           |
+| ~navegosa-media-timeout~      | ~3.0~                 | Kill JXA call after this many s |
+
+Note: a YouTube tab that has never been focused does not load its
+video (the player defers loading until the tab is visible).  Commands
+report it distinctly; use ~navegosa-media-open-tab~ once to start it.
+
+Fullscreen note: the player's own fullscreen cannot be triggered from
+Apple Events (no user activation), so ~navegosa-media-fullscreen-toggle~
+toggles macOS window fullscreen via System Events instead.  That
+requires Accessibility permission for =osascript= (System Settings ->
+Privacy & Security -> Accessibility); without it the command reports
+what to enable.  Combine with theater mode for a near-fullscreen
+video.
 
 ** Safari note
 
