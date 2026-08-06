@@ -12,9 +12,13 @@
 ;; Control video playback (YouTube, Vimeo, etc.) in a browser tab from
 ;; Emacs: play/pause, seek, speed, volume, subtitles, next/prev.
 ;;
-;; Apple-Events JS runs in an isolated world where the page's own JS
-;; (e.g. YouTube's player API) is unreachable, so everything goes
-;; through the DOM: the <video> element plus player buttons.
+;; Two transports share this one command set.  On macOS, Apple-Events
+;; JS runs in an isolated world where the page's own JS (e.g.
+;; YouTube's player API) is unreachable, so everything goes through
+;; the DOM: the <video> element plus player buttons.  On Linux the
+;; commands ride the browser's MPRIS D-Bus interface instead
+;; (navegosa-mpris.el), a narrower surface where some commands
+;; degrade with an honest error.
 ;;
 ;; Tabs are discovered by URL prefilter only and every JXA call is
 ;; deadline-guarded, because executing JS into a discarded (Memory
@@ -23,6 +27,17 @@
 ;;; Code:
 
 (require 'navegosa)
+
+(declare-function navegosa-mpris-dispatch "navegosa-mpris")
+(declare-function navegosa-mpris-select-player "navegosa-mpris")
+(defvar navegosa-mpris--service)
+
+(defun navegosa-media--use-mpris-p ()
+  "Non-nil when media commands ride MPRIS instead of JXA."
+  (and (eq system-type 'gnu/linux)
+       (featurep 'dbusbind)
+       (require 'navegosa-mpris nil t)
+       t))
 
 ;;;; Customization
 
@@ -214,39 +229,46 @@ A live stream's Infinity duration serializes to JSON null."
 HANDLER receives the returned state plist (default:
 `navegosa-media--echo').  On failure the tab cache is invalidated
 and the command retried once against a freshly located tab, unless
-NO-RETRY is non-nil."
-  (let ((tab (navegosa-media--ensure-tab))
-        (handler (or handler #'navegosa-media--echo)))
-    (navegosa-media--call-async
-     (if (equal cmd "status") "mediaStatus" "mediaCommand")
-     (append (list (navegosa--browser)
-                   (plist-get tab :windowIndex)
-                   (plist-get tab :tabIndex))
-             (unless (equal cmd "status") (list cmd arg)))
-     (lambda (state err)
-       (cond
-        ((null err) (funcall handler state))
-        (no-retry (message "navegosa-media: %s" err))
-        (t
-         (setq navegosa-media--tab nil)
-         (condition-case relocate-err
-             (progn
-               (navegosa-media--locate 'auto)
-               (navegosa-media--dispatch cmd arg handler 'no-retry))
-           (error (message "%s" (error-message-string relocate-err))))))))))
+NO-RETRY is non-nil.  On Linux the command goes to the MPRIS lane
+instead, synchronously (in-process D-Bus needs no subprocess)."
+  (if (navegosa-media--use-mpris-p)
+      (navegosa-mpris-dispatch cmd arg (or handler #'navegosa-media--echo))
+    (let ((tab (navegosa-media--ensure-tab))
+          (handler (or handler #'navegosa-media--echo)))
+      (navegosa-media--call-async
+       (if (equal cmd "status") "mediaStatus" "mediaCommand")
+       (append (list (navegosa--browser)
+                     (plist-get tab :windowIndex)
+                     (plist-get tab :tabIndex))
+               (unless (equal cmd "status") (list cmd arg)))
+       (lambda (state err)
+         (cond
+          ((null err) (funcall handler state))
+          (no-retry (message "navegosa-media: %s" err))
+          (t
+           (setq navegosa-media--tab nil)
+           (condition-case relocate-err
+               (progn
+                 (navegosa-media--locate 'auto)
+                 (navegosa-media--dispatch cmd arg handler 'no-retry))
+             (error (message "%s" (error-message-string relocate-err)))))))))))
 
 ;;;; Commands
 
 ;;;###autoload
 (defun navegosa-media-select-tab ()
   "Pick the media tab to control and bring it up in the browser.
-Always prompts, a single candidate showing as the one choice."
+Always prompts, a single candidate showing as the one choice.  On
+the MPRIS lane this picks among active players instead; raising
+the window is not in the protocol."
   (interactive)
-  (let ((tab (navegosa-media--locate 'prompt)))
-    (navegosa--run "activateTab" (navegosa--browser)
-                   (plist-get tab :windowIndex)
-                   (plist-get tab :tabIndex))
-    (message "navegosa-media: controlling %s" (plist-get tab :title))))
+  (if (navegosa-media--use-mpris-p)
+      (navegosa-mpris-select-player)
+    (let ((tab (navegosa-media--locate 'prompt)))
+      (navegosa--run "activateTab" (navegosa--browser)
+                     (plist-get tab :windowIndex)
+                     (plist-get tab :tabIndex))
+      (message "navegosa-media: controlling %s" (plist-get tab :title)))))
 
 ;;;###autoload
 (defun navegosa-media-status ()
@@ -349,6 +371,9 @@ The player's own fullscreen is unreachable (synthetic clicks carry
 no user activation), so this drives the window via System Events -
 requires Accessibility permission for osascript."
   (interactive)
+  (when (navegosa-media--use-mpris-p)
+    (user-error
+     "navegosa-mpris: fullscreen unsupported on this backend (MPRIS has no window surface)"))
   (let ((tab (navegosa-media--ensure-tab)))
     (navegosa-media--call-async
      "windowFullscreenToggle"
@@ -380,6 +405,9 @@ dropped."
   (navegosa-media--dispatch
    "status" nil
    (lambda (state)
+     (unless (plist-get state :url)
+       (user-error
+        "navegosa-media: player exposes no URL (Chromium MPRIS omits xesam:url)"))
      (let ((url (navegosa-media--timestamped-url
                  (plist-get state :url)
                  (or (plist-get state :time) 0))))
@@ -400,13 +428,22 @@ dropped."
   "Open URL as the browser window's front tab and control it.
 The tab is switched in-window without activating the browser app,
 so Emacs keeps focus; media starts once the browser window is
-visible on screen (the player defers loading in hidden tabs)."
+visible on screen (the player defers loading in hidden tabs).
+
+On the MPRIS lane the URL goes through `browse-url' - MPRIS cannot
+open tabs - and the player cache resets so the next command
+attaches to the newly playing media."
   (interactive "sMedia URL: ")
-  (let ((tab (navegosa-media--call-sync "openMediaTab"
-                                        (navegosa--browser) url)))
-    (setq navegosa-media--tab tab)
-    (message "navegosa-media: opened %s" (plist-get tab :url))
-    tab))
+  (if (navegosa-media--use-mpris-p)
+      (progn
+        (browse-url url)
+        (setq navegosa-mpris--service nil)
+        (message "navegosa-media: opened in browser; control attaches once it plays"))
+    (let ((tab (navegosa-media--call-sync "openMediaTab"
+                                          (navegosa--browser) url)))
+      (setq navegosa-media--tab tab)
+      (message "navegosa-media: opened %s" (plist-get tab :url))
+      tab)))
 
 (provide 'navegosa-media)
 ;;; navegosa-media.el ends here

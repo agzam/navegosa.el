@@ -31,6 +31,7 @@ test: $(ELPA_DIR)
 	-l navegosa.el \
 	-l navegosa-tabs.el \
 	-l navegosa-media.el \
+	-l navegosa-mpris.el \
 	-l test/navegosa-tests.el \
 	--funcall buttercup-run
 
@@ -49,7 +50,8 @@ check-compile: $(ELPA_DIR) check-autoloads
 	--eval "(add-to-list 'load-path \".\")" \
 	--eval "(byte-compile-file \"navegosa.el\")" \
 	--eval "(byte-compile-file \"navegosa-tabs.el\")" \
-	--eval "(byte-compile-file \"navegosa-media.el\")"
+	--eval "(byte-compile-file \"navegosa-media.el\")" \
+	--eval "(byte-compile-file \"navegosa-mpris.el\")"
 
 compile: $(ELPA_DIR)
 	@echo "Byte-compiling package files..."
@@ -57,7 +59,8 @@ compile: $(ELPA_DIR)
 	--eval "(add-to-list 'load-path \".\")" \
 	--eval "(byte-compile-file \"navegosa.el\")" \
 	--eval "(byte-compile-file \"navegosa-tabs.el\")" \
-	--eval "(byte-compile-file \"navegosa-media.el\")"
+	--eval "(byte-compile-file \"navegosa-media.el\")" \
+	--eval "(byte-compile-file \"navegosa-mpris.el\")"
 
 clean:
 	@echo "Cleaning compiled files..."

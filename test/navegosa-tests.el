@@ -11,6 +11,7 @@
 (require 'navegosa)
 (require 'navegosa-tabs)
 (require 'navegosa-media)
+(require 'navegosa-mpris)
 (require 'cl-lib)
 
 ;;; Serialization
@@ -690,6 +691,7 @@
 
 (describe "navegosa-media--dispatch"
   (before-each
+    (spy-on 'navegosa-media--use-mpris-p :and-return-value nil)
     (setq navegosa-media--tab
           '(:windowIndex 1 :tabIndex 2
             :url "https://www.youtube.com/watch?v=x" :title "Vid")))
@@ -799,6 +801,7 @@
 
 (describe "navegosa-media-fullscreen-toggle"
   (before-each
+    (spy-on 'navegosa-media--use-mpris-p :and-return-value nil)
     (setq navegosa-media--tab '(:windowIndex 2 :tabIndex 7)))
   (after-each (setq navegosa-media--tab nil))
 
@@ -835,7 +838,15 @@
                                  :title "Vid"))))
     (spy-on 'message)
     (navegosa-media-copy-url)
-    (expect (car kill-ring) :to-equal "https://www.youtube.com/watch?v=x&t=90s")))
+    (expect (car kill-ring) :to-equal "https://www.youtube.com/watch?v=x&t=90s"))
+
+  (it "degrades honestly when the backend exposes no URL"
+    ;; Chromium MPRIS metadata carries no xesam:url.
+    (spy-on 'navegosa-media--dispatch
+            :and-call-fake
+            (lambda (_cmd _arg &optional handler _no-retry)
+              (funcall handler '(:time 90.7 :title "Vid"))))
+    (expect (navegosa-media-copy-url) :to-throw 'user-error)))
 
 (describe "navegosa-media-open-tab"
   (it "activates the cached tab"
@@ -846,6 +857,7 @@
       (expect 'navegosa--run :to-have-been-called-with "activateTab" "Safari" 2 7))))
 
 (describe "navegosa-media-select-tab"
+  (before-each (spy-on 'navegosa-media--use-mpris-p :and-return-value nil))
   (after-each (setq navegosa-media--tab nil))
 
   (it "prompts and brings the picked tab up in the browser"
@@ -860,6 +872,7 @@
     (expect 'navegosa--run :to-have-been-called-with "activateTab" "Safari" 1 5)))
 
 (describe "navegosa-media-open-url"
+  (before-each (spy-on 'navegosa-media--use-mpris-p :and-return-value nil))
   (after-each (setq navegosa-media--tab nil))
 
   (it "opens the url via openMediaTab and controls the new tab"
@@ -871,6 +884,235 @@
     (expect 'navegosa-media--call-sync :to-have-been-called-with
             "openMediaTab" "Safari" "https://youtu.be/x")
     (expect (plist-get navegosa-media--tab :tabIndex) :to-equal 9)))
+
+;;; MPRIS lane (Linux transport, D-Bus fully mocked)
+
+(defmacro navegosa-tests--with-mpris-bus (props &rest body)
+  "Run BODY with the D-Bus mocked from PROPS.
+PROPS is an alist of (SERVICE . PROP-ALIST); `dbus-list-names'
+returns the services, `dbus-get-property' serves PROP-ALIST, and
+method calls are recorded into the anaphoric variable `calls'."
+  (declare (indent 1))
+  `(let ((bus ,props) (calls nil))
+     (ignore bus calls)
+     (spy-on 'dbus-list-names
+             :and-call-fake (lambda (_type) (mapcar #'car bus)))
+     (spy-on 'dbus-get-property
+             :and-call-fake
+             (lambda (_type service _path _iface prop)
+               (cdr (assoc prop (cdr (assoc service bus))))))
+     (spy-on 'dbus-call-method
+             :and-call-fake
+             (lambda (_type service _path _iface method &rest args)
+               (push (cons service (cons method args)) calls)))
+     ,@body))
+
+(describe "navegosa-mpris--services"
+  (after-each (setq navegosa-mpris--service nil))
+
+  (it "filters to active players, browsers first, Playing over Paused"
+    (navegosa-tests--with-mpris-bus
+        '(("org.mpris.MediaPlayer2.spotify"
+           . (("PlaybackStatus" . "Playing")))
+          ("org.mpris.MediaPlayer2.brave.instance1"
+           . (("PlaybackStatus" . "Stopped")))
+          ("org.mpris.MediaPlayer2.chromium.instance2"
+           . (("PlaybackStatus" . "Paused")))
+          ("org.freedesktop.Notifications"
+           . (("PlaybackStatus" . "Playing"))))
+      ;; the lingering Stopped name and the non-MPRIS name drop out;
+      ;; a paused browser still beats a playing non-browser
+      (expect (navegosa-mpris--services)
+              :to-equal '("org.mpris.MediaPlayer2.chromium.instance2"
+                          "org.mpris.MediaPlayer2.spotify")))))
+
+(describe "navegosa-mpris--locate"
+  (after-each (setq navegosa-mpris--service nil))
+
+  (it "errors when no player has controllable media"
+    (navegosa-tests--with-mpris-bus
+        '(("org.mpris.MediaPlayer2.brave.instance1"
+           . (("PlaybackStatus" . "Stopped"))))
+      (expect (navegosa-mpris--locate) :to-throw 'user-error)))
+
+  (it "auto mode takes the best candidate without prompting"
+    (navegosa-tests--with-mpris-bus
+        '(("org.mpris.MediaPlayer2.spotify"
+           . (("PlaybackStatus" . "Playing")))
+          ("org.mpris.MediaPlayer2.brave.instance1"
+           . (("PlaybackStatus" . "Playing"))))
+      (spy-on 'completing-read)
+      (expect (navegosa-mpris--locate 'auto)
+              :to-equal "org.mpris.MediaPlayer2.brave.instance1")
+      (expect navegosa-mpris--service
+              :to-equal "org.mpris.MediaPlayer2.brave.instance1")
+      (expect 'completing-read :not :to-have-been-called)))
+
+  (it "prompt mode offers even a single candidate in the minibuffer"
+    (navegosa-tests--with-mpris-bus
+        '(("org.mpris.MediaPlayer2.brave.instance1"
+           . (("PlaybackStatus" . "Playing")
+              ("Identity" . "Brave")
+              ("Metadata" . (("xesam:title" ("Vid")))))))
+      (spy-on 'completing-read :and-call-fake
+              (lambda (_prompt collection &rest _)
+                (car collection)))
+      (expect (navegosa-mpris--locate 'prompt)
+              :to-equal "org.mpris.MediaPlayer2.brave.instance1")
+      (expect 'completing-read :to-have-been-called))))
+
+(describe "navegosa-mpris--state"
+  (it "maps microseconds and flags into the JXA-shaped plist"
+    (navegosa-tests--with-mpris-bus
+        '(("svc" . (("PlaybackStatus" . "Paused")
+                    ("Position" . 4864509)
+                    ("Rate" . 1.0)
+                    ("Metadata" . (("mpris:length" (1282301000))
+                                   ("mpris:trackid" ("/t/1"))
+                                   ("xesam:title" ("Vid")))))))
+      (let ((state (navegosa-mpris--state "svc")))
+        (expect (plist-get state :time) :to-be-close-to 4.86 1)
+        (expect (plist-get state :duration) :to-be-close-to 1282.3 0)
+        (expect (plist-get state :paused) :to-be t)
+        (expect (plist-get state :title) :to-equal "Vid")
+        (expect (plist-get state :url) :to-be nil)
+        ;; browser MPRIS reports a fake static volume - never show one
+        (expect (plist-member state :volume) :to-be nil))))
+
+  (it "reports no duration when the length is unknown"
+    (navegosa-tests--with-mpris-bus
+        '(("svc" . (("PlaybackStatus" . "Playing")
+                    ("Position" . 0)
+                    ("Metadata" . (("mpris:length" (0)))))))
+      (expect (plist-get (navegosa-mpris--state "svc") :duration) :to-be nil)))
+
+  (it "coerces Chromium's paused Rate 0 artifact to 1x"
+    (navegosa-tests--with-mpris-bus
+        '(("svc" . (("PlaybackStatus" . "Paused")
+                    ("Position" . 0)
+                    ("Rate" . 0.0)
+                    ("Metadata" . nil))))
+      (expect (plist-get (navegosa-mpris--state "svc") :rate) :to-equal 1.0))))
+
+(describe "navegosa-mpris--set-position"
+  :var (base)
+  (before-each
+    (setq base '(("svc" . (("Metadata" . (("mpris:length" (100000000))
+                                          ("mpris:trackid" ("/t/1")))))))))
+
+  (it "seeks through SetPosition with the track id"
+    (navegosa-tests--with-mpris-bus base
+      (expect (navegosa-mpris--set-position "svc" 42.0) :to-equal 42.0)
+      (expect calls :to-equal
+              '(("svc" "SetPosition" :object-path "/t/1" :int64 42000000)))))
+
+  (it "clamps into the track bounds"
+    (navegosa-tests--with-mpris-bus base
+      (expect (navegosa-mpris--set-position "svc" -5) :to-equal 0.0)
+      (expect (navegosa-mpris--set-position "svc" 500) :to-equal 100.0)))
+
+  (it "skips the upper clamp when the length is unknown"
+    (navegosa-tests--with-mpris-bus
+        '(("svc" . (("Metadata" . (("mpris:length" (0))
+                                   ("mpris:trackid" ("/t/1")))))))
+      (expect (navegosa-mpris--set-position "svc" 500) :to-equal 500.0)))
+
+  (it "errors without a track id"
+    (navegosa-tests--with-mpris-bus '(("svc" . (("Metadata" . nil))))
+      (expect (navegosa-mpris--set-position "svc" 10) :to-throw 'user-error))))
+
+(describe "navegosa-mpris-dispatch"
+  :var (playing)
+  (before-each
+    (spy-on 'navegosa-mpris--ensure-service :and-return-value "svc")
+    (setq playing (copy-tree
+                   '(("svc" . (("PlaybackStatus" . "Playing")
+                               ("Position" . 10000000)
+                               ("Rate" . 1.0)
+                               ("CanGoNext" . nil)
+                               ("Metadata" . (("mpris:length" (100000000))
+                                              ("mpris:trackid" ("/t/1"))
+                                              ("xesam:title" ("Vid"))))))))))
+
+  (it "seekBy seeks from the current position and echoes the target"
+    (navegosa-tests--with-mpris-bus playing
+      (let (echoed)
+        (navegosa-mpris-dispatch "seekBy" 30 (lambda (s) (setq echoed s)))
+        (expect calls :to-equal
+                '(("svc" "SetPosition" :object-path "/t/1" :int64 40000000)))
+        (expect (plist-get echoed :time) :to-equal 40.0))))
+
+  (it "playPause flips the echoed paused flag ahead of the browser"
+    (navegosa-tests--with-mpris-bus playing
+      (let (echoed)
+        (navegosa-mpris-dispatch "playPause" nil (lambda (s) (setq echoed s)))
+        (expect (car calls) :to-equal '("svc" "PlayPause"))
+        (expect (plist-get echoed :paused) :to-be t))))
+
+  (it "next honors CanGoNext"
+    (navegosa-tests--with-mpris-bus playing
+      (expect (navegosa-mpris-dispatch "next" nil #'ignore)
+              :to-throw 'user-error)
+      (setf (cdr (assoc "CanGoNext" (cdr (assoc "svc" bus)))) t)
+      (navegosa-mpris-dispatch "next" nil #'ignore)
+      (expect (car calls) :to-equal '("svc" "Next"))))
+
+  (it "commands the browsers cannot honor signal honest errors"
+    (navegosa-tests--with-mpris-bus playing
+      (dolist (cmd '("rateMul" "rateSet" "volumeBy" "muteToggle"
+                     "subsToggle" "theaterToggle"))
+        (expect (navegosa-mpris-dispatch cmd 1 #'ignore)
+                :to-throw 'user-error))
+      (expect calls :to-be nil)))
+
+  (it "invalidates the cache and retries exactly once on a D-Bus error"
+    (let ((attempts nil))
+      (setq navegosa-mpris--service "gone")
+      (spy-on 'navegosa-mpris--ensure-service :and-return-value "gone")
+      (spy-on 'navegosa-mpris--state
+              :and-call-fake
+              (lambda (service)
+                (push service attempts)
+                (signal 'dbus-error '("name vanished"))))
+      (expect (navegosa-mpris-dispatch "status" nil #'ignore)
+              :to-throw 'user-error)
+      (expect attempts :to-equal '("gone" "gone"))
+      (expect navegosa-mpris--service :to-be nil)
+      ;; the retry went through a fresh ensure-service
+      (expect (spy-calls-count 'navegosa-mpris--ensure-service) :to-equal 2))))
+
+(describe "navegosa-media--dispatch (mpris routing)"
+  (it "hands the command to the MPRIS lane with the echo handler"
+    (spy-on 'navegosa-media--use-mpris-p :and-return-value t)
+    (spy-on 'navegosa-mpris-dispatch)
+    (navegosa-media--dispatch "playPause" nil)
+    (expect 'navegosa-mpris-dispatch :to-have-been-called-with
+            "playPause" nil #'navegosa-media--echo))
+
+  (it "never picks MPRIS on darwin"
+    (let ((system-type 'darwin))
+      (expect (navegosa-media--use-mpris-p) :to-be nil))))
+
+(describe "navegosa-media commands (mpris lane)"
+  (before-each (spy-on 'navegosa-media--use-mpris-p :and-return-value t))
+
+  (it "select-tab picks among players instead of tabs"
+    (spy-on 'navegosa-mpris-select-player)
+    (spy-on 'navegosa-media--locate)
+    (navegosa-media-select-tab)
+    (expect 'navegosa-mpris-select-player :to-have-been-called)
+    (expect 'navegosa-media--locate :not :to-have-been-called))
+
+  (it "open-url falls back to browse-url and resets the player cache"
+    (spy-on 'browse-url)
+    (spy-on 'message)
+    (setq navegosa-mpris--service "stale")
+    (navegosa-media-open-url "https://youtu.be/x")
+    (expect 'browse-url :to-have-been-called-with "https://youtu.be/x")
+    (expect navegosa-mpris--service :to-be nil))
+
+  (it "fullscreen reports the missing window surface"
+    (expect (navegosa-media-fullscreen-toggle) :to-throw 'user-error)))
 
 ;;; Media: guarded runner (real subprocesses, osascript swapped out)
 

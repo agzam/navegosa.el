@@ -1,5 +1,12 @@
 #+title: Changelog
 
+* 0.4.0 (2026-08-05)
+- Add =navegosa-mpris.el= - Linux transport for the same ~navegosa-media-*~ commands over the browser's MPRIS D-Bus interface (built-in =dbus.el=, in-process, ~1ms per call); transport picked per-OS in ~navegosa-media--dispatch~.
+- Player discovery filters bus names by playback status (browser names linger after media ends) and ranks per ~navegosa-mpris-player-priority~, browsers first; cache with revalidation and retry-once on D-Bus errors.
+- All seeking via =SetPosition= - relative =Seek= is quantized by the page's own MediaSession handlers; echo predicts the seek target and the flipped pause state.
+- Honest degradation where browsers ignore the protocol: speed, volume, mute, subtitles, theater, fullscreen signal a ~user-error~ with the reason; ~navegosa-media-copy-url~ requires =xesam:url= (Firefox yes, Chromium no); next/prev guarded by =CanGoNext=/=CanGoPrevious=.
+- ~navegosa-media-open-url~ on Linux falls back to ~browse-url~ and re-attaches control to whatever starts playing.
+
 * 0.3.0 (2026-08-05)
 - Add =navegosa-media.el= - media playback control in browser tabs: play/pause, seek, speed, volume, mute, subtitles, next/prev, theater mode, window fullscreen, timestamped URL copy, status echo.
 - Tab discovery by URL prefilter (~navegosa-media-url-patterns~) with cache and retry-once; every JXA call deadline-guarded (~navegosa-media-timeout~) against discarded-tab hangs.

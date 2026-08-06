@@ -5,7 +5,7 @@
 ;; Author: Ag Ibragimov <agzam.ibragimov@gmail.com>
 ;; Maintainer: Ag Ibragimov <agzam.ibragimov@gmail.com>
 ;; Created: May 25, 2026
-;; Version: 0.3.0
+;; Version: 0.4.0
 ;; Keywords: tools convenience
 ;; Homepage: https://github.com/agzam/navegosa.el
 ;; Package-Requires: ((emacs "29.1"))
@@ -22,6 +22,10 @@
 ;;
 ;; All JXA logic lives in a single JS file (navegosa-scripts.js),
 ;; loaded once and piped to osascript via stdin on each call.
+;;
+;; The media-control layer (navegosa-media.el) also runs on Linux,
+;; where the same commands ride the browser's MPRIS D-Bus interface
+;; (navegosa-mpris.el) instead of JXA.
 
 ;;; Code:
 

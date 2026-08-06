@@ -14,7 +14,7 @@ related: [agzam/doom.d:modules/custom/web-browsing/autoload/browser.el]
 
 ## Synopsis
 
-Elisp package for controlling web browsers from Emacs on macOS via JXA (JavaScript for Automation). Ported and expanded from personal Doom module. Name from Spanish "navegar" (to browse/navigate). macOS-only by design - Linux has no OSA equivalent.
+Elisp package for controlling web browsers from Emacs on macOS via JXA (JavaScript for Automation). Ported and expanded from personal Doom module. Name from Spanish "navegar" (to browse/navigate). Tabs and jump-to-link are macOS-only by design - Linux has no OSA equivalent; the media layer (V4) also runs on Linux over MPRIS.
 
 ## Architecture
 
@@ -137,6 +137,28 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - In-page command latency 12-26ms; the ~150ms total round trip is dominated by osascript process spawn.
 - Auto-relocate picks the first candidate, which can itself be a discarded tab; the guard turns that into a clean 3s failure, `navegosa-media-select-tab` is the manual override.
 
+## V4: MPRIS lane (Linux)
+
+- [done] `navegosa-mpris.el` - Linux transport for the same `navegosa-media-*` command set over the browser's MPRIS D-Bus interface; built-in `dbus.el`, in-process, ~1.2ms per property read (vs ~150ms osascript spawn)
+- [done] `navegosa-media--use-mpris-p` routes `navegosa-media--dispatch` (and select-tab/open-url/fullscreen) to `navegosa-mpris-dispatch` on gnu/linux builds with D-Bus; the JXA lane is untouched on darwin
+- [done] Discovery: `org.mpris.MediaPlayer2.*` names filtered by PlaybackStatus Playing/Paused (bus names linger in Stopped state after media ends), ranked by `navegosa-mpris-player-priority` (browsers first), Playing beats Paused within a rank; cache + revalidate + retry-once on D-Bus errors
+- [done] All seeking via `SetPosition` (exact) - relative `Seek` is hijacked by the page's MediaSession seek handlers (YouTube quantizes to ~5s regardless of the requested offset)
+- [done] Echo state shaped like the JXA lane's, with predicted outcome (seek target, flipped pause) because the browser applies commands asynchronously; no volume/muted fields - the bus lies about them
+- [done] Honest degradation: speed (`Rate` writes ignored, Min=Max=1.0), volume/mute (`Volume` inert; muting deregisters the player), subtitles, theater, fullscreen all `user-error` with the reason; `next`/`prev` guarded by `CanGoNext`/`CanGoPrevious` (YouTube exposes them in playlists only); `copy-url` errors on Chromium (no `xesam:url` in metadata - Firefox has it)
+- [done] `navegosa-media-open-url` on Linux: `browse-url` + player-cache reset (MPRIS cannot open tabs); `navegosa-media-select-tab` picks among active players (cannot raise a window)
+- [done] 21 new specs, D-Bus fully mocked (list-names/get-property/call-method fakes); existing JXA dispatch specs pin the transport off since CI runs on ubuntu
+- [done] Live E2E on Linux against Brave: status echo, seekBy exact, playPause with predicted echo, honest errors for speed/copy-url/next
+
+### MPRIS findings (live Brave on Linux, 2026-08-05)
+
+- The browser exposes a media session on the bus only while the media is audible: a tab-level-muted playing video reports Stopped with empty metadata and is uncontrollable. Unmuting registers it within a second.
+- The bus name (`org.mpris.MediaPlayer2.brave.instancePID`) lingers in Stopped state long after media ends - discovery must filter by status, never by name presence.
+- `Rate` writes are silently ignored (readback 1.0, wall-clock advance 1.0x); `MinimumRate = MaximumRate = 1.0` advertises it.
+- `Volume` reads a static 1.0 regardless of the player's real level; writes bounce.
+- Chromium metadata carries exactly artUrl/length/trackid/album/artist/title - no `xesam:url`.
+- Relative `Seek` lands at the page handler's step (~5s on YouTube) whatever offset is requested; `SetPosition` is exact to the microsecond.
+- `CanGoNext`/`CanGoPrevious` are false on a plain watch page; YouTube registers those handlers only in playlist/queue context.
+
 ## Deferred
 
 - Media: skip known-bad candidates on retry; prefer :active tab in auto-locate
@@ -155,7 +177,7 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - Separate navegosa-tabs.el: users who only want link/copy commands skip Org loading
 - Org buffer over tabulated-list: natural nesting for groups, properties for metadata, body text for future content/summaries, familiar folding UX
 - Tab buffer is read-only with action keybindings (magit-style), not editable
-- No Linux support: explicit macOS-only. README states this. If someone adds Chrome DevTools Protocol backend later, navegosa--run abstraction allows it
+- Linux: tabs/jump stay macOS-only (CDP against the default browser profile is dead since Chrome 136), but the media layer runs on Linux over MPRIS (V4) - one command set, per-OS transport picked in `navegosa-media--dispatch`
 - Browser name cached per session: default browser rarely changes. navegosa-reset to invalidate.
 
 ## Browser-specific notes
@@ -179,15 +201,16 @@ Known issues in source:
 ## Progress
 
 Workspace:
-- agzam/navegosa.el @ main (V3 pushed 2026-08-05)
+- agzam/navegosa.el @ main (V3 pushed 2026-08-05; V4 built same day on the Linux box)
 
 Confirmed:
 - All v1 features implemented and E2E tested against live Brave with 49 tabs
 - V2 jump-to-link E2E tested: link collection, hint injection, highlight, cleanup, clickLink all verified against live browser
 - V3 media control implemented and E2E tested against live Brave: full command matrix, timeout guard against a real discarded tab, elisp echo/copy-url/retry flows
+- V4 MPRIS lane implemented and E2E tested against live Brave on Linux: discovery/status/seek/pause plus honest degradation for the rest
 - Browser detection returns "Brave Browser.app" (with .app suffix) - works fine with JXA
-- 82 buttercup specs pass (unit + mocked integration + real-subprocess timeout guard)
-- Byte-compilation clean (navegosa.el, navegosa-tabs.el, navegosa-media.el)
+- 108 buttercup specs pass (unit + mocked integration + real-subprocess timeout guard + mocked D-Bus)
+- Byte-compilation clean (navegosa.el, navegosa-tabs.el, navegosa-media.el, navegosa-mpris.el)
 - GHA runs on push/PR against Emacs 29.4 and 30.1
 
 Next actions:

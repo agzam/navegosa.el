@@ -5,7 +5,10 @@ Control web browser directly from Emacs on macOS.
 
 From Spanish /navegar/ - to browse + /OSA/ (Open Scripting Architecture)
 
-*macOS only.* OSA - JXA/Applescript has no equivalent on other platforms.
+*macOS first.* OSA - JXA/Applescript has no equivalent on other
+platforms, so tabs and jump-to-link are macOS-only. The media-control
+layer also works on Linux, where the same commands ride the browser's
+MPRIS D-Bus interface (see [[#media-control][Media control]]).
 
 ** Supported browsers
 
@@ -140,6 +143,32 @@ requires Accessibility permission for =osascript= (System Settings ->
 Privacy & Security -> Accessibility); without it the command reports
 what to enable.  Combine with theater mode for a near-fullscreen
 video.
+
+*** Linux (MPRIS)
+
+On Linux the same ~navegosa-media-*~ commands control the browser over
+its MPRIS D-Bus interface (built-in =dbus.el=, in-process, ~1ms per
+call).  Discovery filters =org.mpris.MediaPlayer2.*= names by playback
+status (browser bus names linger after media ends) and prefers browser
+players per ~navegosa-mpris-player-priority~; any MPRIS player
+(mpv-mpris, VLC, Spotify) works too.
+
+Browser MPRIS implementations are narrow, so some commands degrade
+with an honest error instead of pretending:
+
+- Works: play/pause, seek (exact, via =SetPosition= - relative =Seek= is
+  quantized by the page's own handlers), next/prev where the site
+  offers them (YouTube: playlists only), status echo, pick player.
+- Unsupported: speed (browsers ignore =Rate= writes), volume and mute
+  (=Volume= is inert; muted media deregisters from the bus entirely),
+  subtitles, theater, fullscreen (no such MPRIS surface).
+- ~navegosa-media-copy-url~ needs =xesam:url= in the metadata: Firefox
+  exposes it, Chromium-family does not.
+- ~navegosa-media-open-url~ falls back to ~browse-url~ and attaches to
+  whatever starts playing.
+
+Caveat: the browser registers media on the bus only while it is
+audible - a muted tab is invisible and uncontrollable over MPRIS.
 
 ** Safari note
 
