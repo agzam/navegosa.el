@@ -5,7 +5,7 @@
 ;; Author: Ag Ibragimov <agzam.ibragimov@gmail.com>
 ;; Maintainer: Ag Ibragimov <agzam.ibragimov@gmail.com>
 ;; Created: May 25, 2026
-;; Version: 0.4.0
+;; Version: 0.5.0
 ;; Keywords: tools convenience
 ;; Homepage: https://github.com/agzam/navegosa.el
 ;; Package-Requires: ((emacs "29.1"))

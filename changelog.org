@@ -1,5 +1,11 @@
 #+title: Changelog
 
+* 0.5.0 (2026-08-05)
+- Linux gap lanes: what MPRIS cannot carry now rides the audio server and the compositor; only what no lane can honor still signals the honest ~user-error~.
+- Volume/mute via =pactl= on the browser's sink-inputs (matched from the MPRIS bus name); clamped at 100%, browser-wide, honest error when no audio flows. Server-side mute keeps the media session registered - tab mute would deregister it.
+- Add =navegosa-keysend.el= - deliver the page's own shortcut keys to the browser window through the compositor: ~navegosa-keysend-function~ backend hook (nil disables) with a Hyprland default (~navegosa-keysend-hyprland~; batched focus bounce, since Chromium ignores synthetic keys while unfocused), ~navegosa-keysend-keys~ action-to-key alist (YouTube defaults).
+- Subtitles (=c=), theater (=t=), and speed (=<= / =>=, routed by direction, page-quantized) work on the MPRIS lane through keysend; speed reset stays impossible (no page key).
+
 * 0.4.0 (2026-08-05)
 - Add =navegosa-mpris.el= - Linux transport for the same ~navegosa-media-*~ commands over the browser's MPRIS D-Bus interface (built-in =dbus.el=, in-process, ~1ms per call); transport picked per-OS in ~navegosa-media--dispatch~.
 - Player discovery filters bus names by playback status (browser names linger after media ends) and ranks per ~navegosa-mpris-player-priority~, browsers first; cache with revalidation and retry-once on D-Bus errors.

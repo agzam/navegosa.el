@@ -159,6 +159,23 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - Relative `Seek` lands at the page handler's step (~5s on YouTube) whatever offset is requested; `SetPosition` is exact to the microsecond.
 - `CanGoNext`/`CanGoPrevious` are false on a plain watch page; YouTube registers those handlers only in playlist/queue context.
 
+## V5: Linux gap lanes (audio server + compositor keys)
+
+What MPRIS cannot carry rides two side lanes; only what no lane can honor still errors.
+
+- [done] Volume/mute ride the audio server: `pactl` on the browser's sink-inputs, matched case-insensitively by the bus name's app token ("brave") against `application.name`/`application.process.binary`. Target computed from the current level and clamped 0-100% (audio-server gain above only distorts), set on every matching stream - Chromium's `media.name` is a generic "Playback", so browser-wide volume is what the lane can honestly offer. Mute sets the flipped state (not toggle) so streams converge.
+- [done] Subtitles, theater, and speed send the page's own keyboard shortcut (c, t, <, >) at the browser window: new `navegosa-keysend.el` with `navegosa-keysend-function` (backend contract: KEY TITLE &optional CLASS; signal `user-error` with the reason when delivery is impossible; nil disables the fallbacks) and `navegosa-keysend-keys` (action -> key alist, YouTube defaults). Default backend `navegosa-keysend-hyprland`: target window matched by MPRIS `xesam:title` substring against `hyprctl clients -j` titles within a class filter derived from the bus name, key delivered via `sendshortcut`.
+- [done] `rateMul` routes by direction to the page speed keys (YouTube-quantized 0.25 steps); `rateSet` stays an honest error - the page has no reset key. Fullscreen and per-tab volume remain impossible.
+- [done] 20 new specs (hyprctl/pactl fully mocked, window matcher and stream filter tested pure) - 128 total; strict compile includes the new file.
+
+### Keysend findings (live Brave on Hyprland 0.56, 2026-08-05)
+
+- Chromium discards compositor-synthesized keys while its window lacks keyboard focus (spec-correct Wayland client: no wl_keyboard enter, no input). Bare `sendshortcut` silently does nothing; the working delivery is one batched IPC - `focuswindow` target, `sendshortcut`, `focuswindow` back - a milliseconds excursion, imperceptible in practice (user-confirmed). The dispatcher answers "ok" either way: success is not readable from the exit status.
+- Hyprland resolves bare keysyms only at the keymap's unshifted level: "greater" is "key not found" while `SHIFT,period` delivers `>`. Shifted characters map to explicit MOD,KEY specs (`navegosa-keysend--key-specs`).
+- Audio-server mute is invisible to the browser: the MPRIS session stays registered and controllable (position keeps ticking through the mute) - unlike tab-level mute, which deregisters the player. This asymmetry is what makes a mute command possible on Linux at all.
+- The sink-input exists only while audio flows: appears when playback starts, survives a pause briefly, disappears after longer idle. Volume/mute answer honestly ("no audio stream") when it is gone.
+- Injected keys land in the window's active tab exactly like typed input: the video's tab must be frontmost in its window (enforced by the title match, honest error otherwise), and page-key interceptors must be excluded on the site - with default bindings Vimium-C's `t` opens a new tab instead of theater.
+
 ## Deferred
 
 - Media: skip known-bad candidates on retry; prefer :active tab in auto-locate
@@ -201,16 +218,17 @@ Known issues in source:
 ## Progress
 
 Workspace:
-- agzam/navegosa.el @ main (V3 pushed 2026-08-05; V4 built same day on the Linux box)
+- agzam/navegosa.el @ main (V3 and V4 pushed 2026-08-05; V5 built same day on the Linux box, uncommitted)
 
 Confirmed:
 - All v1 features implemented and E2E tested against live Brave with 49 tabs
 - V2 jump-to-link E2E tested: link collection, hint injection, highlight, cleanup, clickLink all verified against live browser
 - V3 media control implemented and E2E tested against live Brave: full command matrix, timeout guard against a real discarded tab, elisp echo/copy-url/retry flows
 - V4 MPRIS lane implemented and E2E tested against live Brave on Linux: discovery/status/seek/pause plus honest degradation for the rest
+- V5 gap lanes implemented and E2E tested live (Brave, Hyprland, PipeWire): volume glide under a held transient key, mute with the session staying controllable, subs/theater/speed keys through the compositor bounce, honest errors when the stream is gone or the tab is not frontmost
 - Browser detection returns "Brave Browser.app" (with .app suffix) - works fine with JXA
-- 108 buttercup specs pass (unit + mocked integration + real-subprocess timeout guard + mocked D-Bus)
-- Byte-compilation clean (navegosa.el, navegosa-tabs.el, navegosa-media.el, navegosa-mpris.el)
+- 128 buttercup specs pass (unit + mocked integration + real-subprocess timeout guard + mocked D-Bus + mocked hyprctl/pactl)
+- Byte-compilation clean (navegosa.el, navegosa-tabs.el, navegosa-media.el, navegosa-keysend.el, navegosa-mpris.el)
 - GHA runs on push/PR against Emacs 29.4 and 30.1
 
 Next actions:
@@ -223,3 +241,5 @@ Next actions:
 - 2025-05-25: v1 implemented. All core + tabs features done. 35 tests. E2E verified. Pushed 5677f66.
 - 2025-05-25: v2 jump-to-link. Hint overlays, consult live highlight, async runner, 10 new tests, 29.4 test fixes.
 - 2026-08-05: v3 media control. navegosa-media.el, getMediaTabs/mediaCommand/mediaStatus JS, timeout-guarded runner, 33 new tests, live E2E incl. discarded-tab guard. Version 0.3.0.
+- 2026-08-05: v4 MPRIS lane. navegosa-mpris.el, per-OS transport routing, status-filtered discovery, SetPosition-only seeking, honest degradation, mocked-D-Bus specs, live E2E on the Linux box. Version 0.4.0.
+- 2026-08-05: v5 Linux gap lanes. pactl stream volume/mute (PA-mute keeps the MPRIS session alive), navegosa-keysend.el compositor key delivery (Hyprland batched focus-bounce - Chromium ignores unfocused synthetic keys; SHIFT specs for shifted keysyms), speed via page keys by direction, 20 new specs, live E2E incl. held-key volume glide. Version 0.5.0.

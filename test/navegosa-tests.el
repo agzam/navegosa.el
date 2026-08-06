@@ -1057,13 +1057,67 @@ method calls are recorded into the anaphoric variable `calls'."
       (navegosa-mpris-dispatch "next" nil #'ignore)
       (expect (car calls) :to-equal '("svc" "Next"))))
 
-  (it "commands the browsers cannot honor signal honest errors"
+  (it "commands no lane can honor signal honest errors"
     (navegosa-tests--with-mpris-bus playing
-      (dolist (cmd '("rateMul" "rateSet" "volumeBy" "muteToggle"
-                     "subsToggle" "theaterToggle"))
-        (expect (navegosa-mpris-dispatch cmd 1 #'ignore)
-                :to-throw 'user-error))
+      ;; speed reset has no lane at all: Rate writes are ignored and
+      ;; the page has no reset key
+      (expect (navegosa-mpris-dispatch "rateSet" 1 #'ignore)
+              :to-throw 'user-error)
+      ;; volume/mute ride pactl - honest error on a box without it
+      (spy-on 'executable-find :and-return-value nil)
+      (expect (navegosa-mpris-dispatch "volumeBy" 0.1 #'ignore)
+              :to-throw 'user-error)
+      (expect (navegosa-mpris-dispatch "muteToggle" nil #'ignore)
+              :to-throw 'user-error)
+      ;; speed/subs/theater ride the compositor keysend - honest when off
+      (let ((navegosa-keysend-function nil))
+        (dolist (cmd '("rateMul" "subsToggle" "theaterToggle"))
+          (expect (navegosa-mpris-dispatch cmd 1.1 #'ignore)
+                  :to-throw 'user-error)))
       (expect calls :to-be nil)))
+
+  (it "rateMul routes to the page's speed keys by direction"
+    (navegosa-tests--with-mpris-bus playing
+      (let* (sent
+             (navegosa-keysend-function
+              (lambda (key _title _class) (push key sent))))
+        (navegosa-mpris-dispatch "rateMul" 1.1 #'ignore)
+        (navegosa-mpris-dispatch "rateMul" (/ 1.0 1.1) #'ignore)
+        (expect (nreverse sent) :to-equal '(">" "<")))))
+
+  (it "volumeBy echoes the stream lane's new level in the state"
+    (navegosa-tests--with-mpris-bus playing
+      (spy-on 'navegosa-mpris--stream-volume-by :and-return-value 0.9)
+      (let (echoed)
+        (navegosa-mpris-dispatch "volumeBy" 0.1 (lambda (s) (setq echoed s)))
+        (expect 'navegosa-mpris--stream-volume-by
+                :to-have-been-called-with "svc" 0.1)
+        (expect (plist-get echoed :volume) :to-equal 0.9))))
+
+  (it "muteToggle echoes the stream lane's new state"
+    (navegosa-tests--with-mpris-bus playing
+      (spy-on 'navegosa-mpris--stream-mute-toggle :and-return-value t)
+      (let (echoed)
+        (navegosa-mpris-dispatch "muteToggle" nil (lambda (s) (setq echoed s)))
+        (expect (plist-get echoed :muted) :to-be t))))
+
+  (it "subsToggle sends the page key at the player's window"
+    (navegosa-tests--with-mpris-bus playing
+      (let* (sent echoed
+             (navegosa-keysend-function
+              (lambda (key title class) (setq sent (list key title class)))))
+        (navegosa-mpris-dispatch "subsToggle" nil (lambda (s) (setq echoed s)))
+        ;; the test service name has no app token to offer as a class hint
+        (expect sent :to-equal '("c" "Vid" nil))
+        (expect (plist-get echoed :warning) :to-match "sent c"))))
+
+  (it "theaterToggle uses its own key from navegosa-keysend-keys"
+    (navegosa-tests--with-mpris-bus playing
+      (let* (sent
+             (navegosa-keysend-function
+              (lambda (key _title _class) (setq sent key))))
+        (navegosa-mpris-dispatch "theaterToggle" nil #'ignore)
+        (expect sent :to-equal "t"))))
 
   (it "invalidates the cache and retries exactly once on a D-Bus error"
     (let ((attempts nil))
@@ -1080,6 +1134,137 @@ method calls are recorded into the anaphoric variable `calls'."
       (expect navegosa-mpris--service :to-be nil)
       ;; the retry went through a fresh ensure-service
       (expect (spy-calls-count 'navegosa-mpris--ensure-service) :to-equal 2))))
+
+(describe "navegosa-keysend--match-window"
+  :var (clients)
+  (before-each
+    (setq clients
+          '(((class . "Emacs") (title . "notes on Vid") (address . "0x1"))
+            ((class . "brave-browser") (title . "Other - Brave") (address . "0x2"))
+            ((class . "brave-browser") (title . "Vid - YouTube - Brave")
+             (address . "0x3")))))
+
+  (it "picks the window whose title contains the media title"
+    (expect (alist-get 'address
+                       (navegosa-keysend--match-window clients "Vid" "brave"))
+            :to-equal "0x3"))
+
+  (it "the class hint keeps a title-quoting bystander from matching"
+    ;; without the hint the Emacs window quoting the title wins by order
+    (expect (alist-get 'address
+                       (navegosa-keysend--match-window clients "Vid" nil))
+            :to-equal "0x1")
+    (expect (alist-get 'address
+                       (navegosa-keysend--match-window clients "Vid" "BRAVE"))
+            :to-equal "0x3"))
+
+  (it "returns nil when no window shows the title"
+    (expect (navegosa-keysend--match-window clients "Elsewhere" "brave")
+            :to-be nil)))
+
+(describe "navegosa-keysend-hyprland"
+  :var (active sent)
+  (before-each
+    (setq sent nil
+          active '((class . "Emacs") (address . "0xe")))
+    (spy-on 'executable-find :and-return-value "/usr/bin/hyprctl")
+    (spy-on 'navegosa-keysend--hyprctl-json
+            :and-call-fake
+            (lambda (cmd)
+              (pcase cmd
+                ("clients" '(((class . "brave-browser")
+                              (title . "Vid - YouTube - Brave")
+                              (address . "0xb"))))
+                ("activewindow" active))))
+    (spy-on 'call-process
+            :and-call-fake
+            (lambda (_prog _in _dest _display &rest args)
+              (setq sent args)
+              0)))
+
+  (it "bounces focus in one compositor batch when the browser is unfocused"
+    ;; Chromium discards synthetic keys while unfocused: focus the
+    ;; target, send, restore - back-to-back inside one IPC
+    (navegosa-keysend-hyprland "c" "Vid" "brave")
+    (expect (car sent) :to-equal "--batch")
+    (expect (cadr sent) :to-match "dispatch focuswindow address:0xb ; ")
+    (expect (cadr sent) :to-match "dispatch sendshortcut ,c,address:0xb")
+    (expect (cadr sent) :to-match "; dispatch focuswindow address:0xe\\'"))
+
+  (it "sends without a bounce when the browser already has focus"
+    (setq active '((class . "brave-browser") (address . "0xb")))
+    (navegosa-keysend-hyprland "c" "Vid" "brave")
+    (expect sent :to-equal '("dispatch" "sendshortcut" ",c,address:0xb")))
+
+  (it "skips the focus restore when nothing was focused"
+    (setq active nil)
+    (navegosa-keysend-hyprland "c" "Vid" "brave")
+    (expect (cadr sent) :to-match "sendshortcut ,c,address:0xb\\'"))
+
+  (it "translates shifted characters to explicit SHIFT specs"
+    ;; Hyprland resolves bare keysyms only at the unshifted level:
+    ;; "greater" is never found, SHIFT+period is
+    (navegosa-keysend-hyprland "<" "Vid" "brave")
+    (expect (cadr sent) :to-match "sendshortcut SHIFT,comma,address:0xb"))
+
+  (it "errors honestly when no window shows the video"
+    (expect (navegosa-keysend-hyprland "c" "Nope" "brave")
+            :to-throw 'user-error)
+    (expect sent :to-be nil))
+
+  (it "errors honestly without hyprctl"
+    (spy-on 'executable-find :and-return-value nil)
+    (expect (navegosa-keysend-hyprland "c" "Vid" nil)
+            :to-throw 'user-error)))
+
+(describe "navegosa-mpris stream volume"
+  :var (set-calls)
+  (before-each
+    (setq set-calls nil)
+    (spy-on 'executable-find :and-return-value "/usr/bin/pactl")
+    (spy-on 'navegosa-mpris--pactl
+            :and-call-fake
+            (lambda (&rest args)
+              (if (equal (car args) "-f")
+                  (concat
+                   "[{\"index\":7,\"mute\":false,"
+                   "\"volume\":{\"front-left\":{\"value_percent\":\"80%\"}},"
+                   "\"properties\":{\"application.name\":\"Brave\","
+                   "\"application.process.binary\":\"brave\"}},"
+                   "{\"index\":9,\"mute\":false,"
+                   "\"volume\":{\"front-left\":{\"value_percent\":\"40%\"}},"
+                   "\"properties\":{\"application.name\":\"Firefox\","
+                   "\"application.process.binary\":\"firefox\"}}]")
+                (push args set-calls)
+                ""))))
+
+  (it "matches streams by the bus-name app token, case-insensitively"
+    (let ((streams (navegosa-mpris--streams
+                    "org.mpris.MediaPlayer2.brave.instance12")))
+      (expect (length streams) :to-equal 1)
+      (expect (alist-get 'index (car streams)) :to-equal 7)))
+
+  (it "errors honestly when the browser has no stream (paused tab)"
+    (expect (navegosa-mpris--streams "org.mpris.MediaPlayer2.chromium.i1")
+            :to-throw 'user-error))
+
+  (it "steps the volume from the current level and sets every stream"
+    (expect (navegosa-mpris--stream-volume-by
+             "org.mpris.MediaPlayer2.brave.instance12" 0.1)
+            :to-be-close-to 0.9 2)
+    (expect set-calls :to-equal '(("set-sink-input-volume" "7" "90%"))))
+
+  (it "clamps at 100%: audio-server gain above only distorts"
+    (expect (navegosa-mpris--stream-volume-by
+             "org.mpris.MediaPlayer2.brave.instance12" 0.5)
+            :to-equal 1.0)
+    (expect set-calls :to-equal '(("set-sink-input-volume" "7" "100%"))))
+
+  (it "mute sets the flipped state explicitly so streams converge"
+    (expect (navegosa-mpris--stream-mute-toggle
+             "org.mpris.MediaPlayer2.brave.instance12")
+            :to-be t)
+    (expect set-calls :to-equal '(("set-sink-input-mute" "7" "1")))))
 
 (describe "navegosa-media--dispatch (mpris routing)"
   (it "hands the command to the MPRIS lane with the echo handler"

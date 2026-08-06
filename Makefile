@@ -31,6 +31,7 @@ test: $(ELPA_DIR)
 	-l navegosa.el \
 	-l navegosa-tabs.el \
 	-l navegosa-media.el \
+	-l navegosa-keysend.el \
 	-l navegosa-mpris.el \
 	-l test/navegosa-tests.el \
 	--funcall buttercup-run
@@ -51,6 +52,7 @@ check-compile: $(ELPA_DIR) check-autoloads
 	--eval "(byte-compile-file \"navegosa.el\")" \
 	--eval "(byte-compile-file \"navegosa-tabs.el\")" \
 	--eval "(byte-compile-file \"navegosa-media.el\")" \
+	--eval "(byte-compile-file \"navegosa-keysend.el\")" \
 	--eval "(byte-compile-file \"navegosa-mpris.el\")"
 
 compile: $(ELPA_DIR)
@@ -60,6 +62,7 @@ compile: $(ELPA_DIR)
 	--eval "(byte-compile-file \"navegosa.el\")" \
 	--eval "(byte-compile-file \"navegosa-tabs.el\")" \
 	--eval "(byte-compile-file \"navegosa-media.el\")" \
+	--eval "(byte-compile-file \"navegosa-keysend.el\")" \
 	--eval "(byte-compile-file \"navegosa-mpris.el\")"
 
 clean:

@@ -153,22 +153,36 @@ status (browser bus names linger after media ends) and prefers browser
 players per ~navegosa-mpris-player-priority~; any MPRIS player
 (mpv-mpris, VLC, Spotify) works too.
 
-Browser MPRIS implementations are narrow, so some commands degrade
-with an honest error instead of pretending:
+Browser MPRIS implementations are narrow, so what the protocol cannot
+carry rides two side lanes, and only the rest degrades with an honest
+error:
 
-- Works: play/pause, seek (exact, via =SetPosition= - relative =Seek= is
-  quantized by the page's own handlers), next/prev where the site
-  offers them (YouTube: playlists only), status echo, pick player.
-- Unsupported: speed (browsers ignore =Rate= writes), volume and mute
-  (=Volume= is inert; muted media deregisters from the bus entirely),
-  subtitles, theater, fullscreen (no such MPRIS surface).
+- Over MPRIS: play/pause, seek (exact, via =SetPosition= - relative
+  =Seek= is quantized by the page's own handlers), next/prev where the
+  site offers them (YouTube: playlists only), status echo, pick player.
+- Over the audio server (=pactl= on the browser's streams): volume and
+  mute.  Browser-wide, clamped at 100%; server-side mute keeps the
+  media session registered, unlike muting the tab.  Needs audio
+  actually flowing - a long-paused tab has no stream.
+- Over the compositor (~navegosa-keysend-function~): subtitles,
+  theater, and speed, by sending the page's own keys (=c=, =t=, =<=,
+  =>=) at the browser window.  Ships a Hyprland backend
+  (~navegosa-keysend-hyprland~; Chromium ignores unfocused synthetic
+  keys, so delivery is one batched focus bounce); other compositors
+  plug in via the same function variable, nil disables.  The video's
+  tab must be frontmost in its window, and extensions like Vimium
+  must not intercept keys on the site.  ~navegosa-keysend-keys~ remaps
+  per site preference.
+- Still unsupported: speed reset (no page key), fullscreen, per-tab
+  volume.
 - ~navegosa-media-copy-url~ needs =xesam:url= in the metadata: Firefox
   exposes it, Chromium-family does not.
 - ~navegosa-media-open-url~ falls back to ~browse-url~ and attaches to
   whatever starts playing.
 
 Caveat: the browser registers media on the bus only while it is
-audible - a muted tab is invisible and uncontrollable over MPRIS.
+audible - a tab-muted video is invisible and uncontrollable over
+MPRIS (use the =m= mute instead, which works server-side).
 
 ** Safari note
 
