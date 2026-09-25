@@ -1,5 +1,10 @@
 #+title: Changelog
 
+* Unreleased
+- Media commands keep keyboard focus in Emacs: ~navegosa-media-select-tab~ and ~navegosa-media-open-tab~ show the tab in its window without activating the browser (JS =showTab=; =activateTab= still activates, for the general tab switchers).
+- ~navegosa-media-fullscreen-toggle~ hands keyboard focus straight back to Emacs when entering fullscreen activates the browser: ~navegosa--reclaim-focus~ starts a JXA watcher that re-activates Emacs the moment the browser is in front, for up to ~navegosa-reclaim-focus-wait~ seconds.
+- Fix ~navegosa-media-fullscreen-toggle~ flipping an unnamed helper window instead of the browser window on the way out of fullscreen: the target is the standard window whose title starts with the browser's window name.
+
 * 0.5.0 (2026-08-05)
 - Linux gap lanes: what MPRIS cannot carry now rides the audio server and the compositor; only what no lane can honor still signals the honest ~user-error~.
 - Volume/mute via =pactl= on the browser's sink-inputs (matched from the MPRIS bus name); clamped at 100%, browser-wide, honest error when no audio flows. Server-side mute keeps the media session registered - tab mute would deregister it.

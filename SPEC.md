@@ -117,12 +117,13 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - [done] Commands: playPause, seekBy, seekTo, rateMul, rateSet (rate clamped 0.25-5x), volumeBy (clamped 0-1, volume-up unmutes), muteToggle, subsToggle, next, prev
 - [done] subsToggle clicks `.ytp-subtitles-button` when present (YouTube), otherwise cycles `video.textTracks` modes
 - [done] theaterToggle clicks `.ytp-size-button` (E2E: theater attribute cycles on a visible tab; hidden tabs apply it when shown)
-- [done] `windowFullscreenToggle(browser, w)` - macOS window fullscreen via System Events AXFullScreen; needs Accessibility permission for osascript, reports the grant path otherwise. Player fullscreen is unreachable: synthetic clicks carry no user activation, Fullscreen API fires `fullscreenerror` (E2E-verified)
+- [done] `windowFullscreenToggle(browser, w)` - macOS window fullscreen via System Events AXFullScreen; needs Accessibility permission for osascript, reports the grant path otherwise. Player fullscreen is unreachable: synthetic clicks carry no user activation, Fullscreen API fires `fullscreenerror` (E2E-verified). The target is the `AXStandardWindow` whose AX title starts with the browser's window name: AX titles carry suffixes ("... - Audio playing - Brave") and a fullscreen window grows unnamed `AXUnknown` siblings, so the old exact match with a `[0]` fallback flipped a helper window on the way out of fullscreen
+- [done] Focus contract: media commands never activate the browser. `showTab(browser, w, t)` switches the tab in its window and raises the window within the browser only; `activateTab` is `showTab` plus app activation and stays with the general tab switchers. Entering fullscreen activates the browser about 1s after the call, so `navegosa-media-fullscreen-toggle` first starts `navegosa--reclaim-focus` - a fire-and-forget JS `reclaimFocus(browser, pid, waitMs)` that re-activates Emacs the moment the browser is frontmost (E2E: browser in front at +0.9s, Emacs back 92ms later; exiting fullscreen takes no focus)
 - [done] Timeout-guarded runner: every media JXA call is killed after `navegosa-media-timeout` (default 3s); async with result callback plus a sync wrapper
 - [done] Tab cache + locate: candidates from `navegosa-media-url-patterns` (JS regexes, joined with `|`), `completing-read` on several, auto-pick first in retry context; on command failure invalidate cache, re-locate once, retry once
 - [done] Echo from every command's returned state: `12:34/56:07 1.5x vol:80% [muted] [paused] Title`
 - [done] `navegosa-media-copy-url` - `t=` query param for YouTube URLs, `#t=` media fragment for the rest
-- [done] `navegosa-media-select-tab` always prompts (single candidate shows as the one choice) and brings the pick up in the browser
+- [done] `navegosa-media-select-tab` always prompts (single candidate shows as the one choice) and shows the pick in its window via `showTab`, without activating the browser
 - [done] `navegosa-media-open-url` / JS `openMediaTab` - open a URL as the frontmost window's front tab and control it; tab switched in-window without activating the browser app, so Emacs keeps focus and playback starts as long as the window is visible on screen (E2E-verified)
 - [done] Core refactor: `navegosa--build-script` + `navegosa--parse-result` extracted from `navegosa--run`, shared with the media runner
 - [done] 33 new tests: formatting, URL stamping, locate/cache, dispatch args, retry-once, real-subprocess timeout guard (osascript swapped for sleep/sh so they run on Linux CI)
@@ -136,6 +137,9 @@ All JXA functions return JSON. Elisp side parses with `json-read-from-string`.
 - `prev` (`.ytp-prev-button`) is inert outside playlist/watch-history context - YouTube behavior, mirrors mpv playlist-prev semantics.
 - In-page command latency 12-26ms; the ~150ms total round trip is dominated by osascript process spawn.
 - Auto-relocate picks the first candidate, which can itself be a discarded tab; the guard turns that into a clean 3s failure, `navegosa-media-select-tab` is the manual override.
+- DOM commands (play/pause, theater, status) never move keyboard focus, fullscreen browser window or not; the focus thefts came from `activateTab` (select-tab, open-tab) and from entering macOS fullscreen.
+- `NSWorkspace.frontmostApplication` goes stale inside an osascript that waits with `delay()`: the first read sticks until the run loop spins. `NSRunLoop.currentRunLoop.runUntilDate` both waits for its interval and refreshes the value. A three-observer probe showed it: the `delay()` poll saw only its first value, the run-loop poll and System Events agreed within 20ms.
+- `NSRunningApplication.activateWithOptions` from osascript is refused under cooperative activation (returns true, nothing happens). The AppleScript `activate` command sent to Emacs, by pid or bundle id, is honored within ~50-90ms, from a fresh or a long-running osascript alike.
 
 ## V4: MPRIS lane (Linux)
 
@@ -227,7 +231,7 @@ Confirmed:
 - V4 MPRIS lane implemented and E2E tested against live Brave on Linux: discovery/status/seek/pause plus honest degradation for the rest
 - V5 gap lanes implemented and E2E tested live (Brave, Hyprland, PipeWire): volume glide under a held transient key, mute with the session staying controllable, subs/theater/speed keys through the compositor bounce, honest errors when the stream is gone or the tab is not frontmost
 - Browser detection returns "Brave Browser.app" (with .app suffix) - works fine with JXA
-- 128 buttercup specs pass (unit + mocked integration + real-subprocess timeout guard + mocked D-Bus + mocked hyprctl/pactl)
+- 137 buttercup specs pass (unit + mocked integration + real-subprocess timeout guard + mocked D-Bus + mocked hyprctl/pactl)
 - Byte-compilation clean (navegosa.el, navegosa-tabs.el, navegosa-media.el, navegosa-keysend.el, navegosa-mpris.el)
 - GHA runs on push/PR against Emacs 29.4 and 30.1
 
@@ -243,3 +247,4 @@ Next actions:
 - 2026-08-05: v3 media control. navegosa-media.el, getMediaTabs/mediaCommand/mediaStatus JS, timeout-guarded runner, 33 new tests, live E2E incl. discarded-tab guard. Version 0.3.0.
 - 2026-08-05: v4 MPRIS lane. navegosa-mpris.el, per-OS transport routing, status-filtered discovery, SetPosition-only seeking, honest degradation, mocked-D-Bus specs, live E2E on the Linux box. Version 0.4.0.
 - 2026-08-05: v5 Linux gap lanes. pactl stream volume/mute (PA-mute keeps the MPRIS session alive), navegosa-keysend.el compositor key delivery (Hyprland batched focus-bounce - Chromium ignores unfocused synthetic keys; SHIFT specs for shifted keysyms), speed via page keys by direction, 20 new specs, live E2E incl. held-key volume glide. Version 0.5.0.
+- 2026-09-25: focus stays in Emacs. `showTab` replaces `activateTab` in the media lane, `reclaimFocus` watcher hands focus back after the fullscreen transition activates the browser (run-loop-spun poll - a `delay()` poll reads a stale frontmost app), fullscreen targets the standard window by title prefix. 9 new specs, live E2E on Brave across two displays.

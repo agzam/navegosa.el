@@ -113,7 +113,7 @@ Events (see below). Works on background tabs - no focus stealing.
 | ~navegosa-media-copy-url~          | Copy URL timestamped at current position   |
 | ~navegosa-media-status~            | Echo position/rate/volume/title            |
 | ~navegosa-media-select-tab~        | Pick a media tab (always prompts), show it |
-| ~navegosa-media-open-tab~          | Activate the controlled tab in the browser |
+| ~navegosa-media-open-tab~          | Show the controlled tab in its window      |
 | ~navegosa-media-open-url~          | Open a URL as front tab and control it     |
 
 Every command echoes the resulting state, e.g. =12:34/56:07 1.5x
@@ -132,17 +132,9 @@ against a freshly located tab.  Every call is deadline-guarded.
 | ~navegosa-media-volume-step~  | ~0.1~                 | Volume step (0.0-1.0)           |
 | ~navegosa-media-timeout~      | ~3.0~                 | Kill JXA call after this many s |
 
-Note: a YouTube tab that has never been focused does not load its
-video (the player defers loading until the tab is visible).  Commands
-report it distinctly; use ~navegosa-media-open-tab~ once to start it.
+Note: a YouTube tab that has never been focused does not load its video (the player defers loading until the tab is visible).  Commands report it distinctly; use ~navegosa-media-open-tab~ once to start it.  It shows the tab without activating the browser, so the browser window must be visible on screen.
 
-Fullscreen note: the player's own fullscreen cannot be triggered from
-Apple Events (no user activation), so ~navegosa-media-fullscreen-toggle~
-toggles macOS window fullscreen via System Events instead.  That
-requires Accessibility permission for =osascript= (System Settings ->
-Privacy & Security -> Accessibility); without it the command reports
-what to enable.  Combine with theater mode for a near-fullscreen
-video.
+Fullscreen note: the player's own fullscreen cannot be triggered from Apple Events (no user activation), so ~navegosa-media-fullscreen-toggle~ toggles macOS window fullscreen via System Events instead.  That requires Accessibility permission for =osascript= (System Settings -> Privacy & Security -> Accessibility); without it the command reports what to enable.  Entering fullscreen activates the browser when the animation ends; the command hands keyboard focus straight back to Emacs (it watches for ~navegosa-reclaim-focus-wait~ seconds).  Combine with theater mode for a near-fullscreen video.
 
 *** Linux (MPRIS)
 
@@ -199,3 +191,4 @@ All JXA logic lives in a single =navegosa-scripts.js= file - a dispatch object w
 ** License
 
 GPL-3.0-or-later
+L-3.0-or-later

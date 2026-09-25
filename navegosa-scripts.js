@@ -24,7 +24,10 @@ const Navegosa = {
     return tabs;
   },
 
-  activateTab(browserName, windowIndex, tabIndex) {
+  // Make the tab its window's front tab and raise that window within
+  // the browser, without activating the browser app: the caller
+  // (Emacs) keeps keyboard focus.
+  showTab(browserName, windowIndex, tabIndex) {
     const browser = Application(browserName);
     const wins = browser.windows();
     if (wins.length < windowIndex) return {error: "Window index out of range"};
@@ -32,8 +35,43 @@ const Navegosa = {
     if (win.tabs().length < tabIndex) return {error: "Tab index out of range"};
     win.activeTabIndex = tabIndex;
     win.index = 1;
-    browser.activate();
     return {ok: true};
+  },
+
+  activateTab(browserName, windowIndex, tabIndex) {
+    const shown = this.showTab(browserName, windowIndex, tabIndex);
+    if (shown.error) return shown;
+    Application(browserName).activate();
+    return shown;
+  },
+
+  // Watch for up to waitMs and, the moment the browser takes keyboard
+  // focus, hand it back to the process pid (Emacs).  Runs as its own
+  // fire-and-forget osascript next to an operation that activates the
+  // browser after its Apple Event has returned: entering macOS
+  // fullscreen activates the browser when the animation ends, about a
+  // second later.  Every wait spins the run loop: NSWorkspace refreshes
+  // frontmostApplication from run-loop notifications and delay() does
+  // not spin it, so a poll built on delay() keeps reading its first
+  // value.  The AppleScript activate command does the handing back;
+  // NSRunningApplication.activateWithOptions is refused under
+  // cooperative activation.
+  reclaimFocus(browserName, pid, waitMs) {
+    ObjC.import("AppKit");
+    const ws = $.NSWorkspace.sharedWorkspace;
+    const wait = s => $.NSRunLoop.currentRunLoop.runUntilDate(
+      $.NSDate.dateWithTimeIntervalSinceNow(s));
+    const browserId = Application(browserName).id();
+    const ownerInFront = () => ws.frontmostApplication.processIdentifier === pid;
+    let deadline = Date.now() + waitMs;
+    while (ws.frontmostApplication.bundleIdentifier.js !== browserId) {
+      if (deadline < Date.now()) return {ok: true, reclaimed: false};
+      wait(0.05);
+    }
+    const owner = Application(pid);
+    deadline = Date.now() + 3000;
+    do { owner.activate(); wait(0.2); } while (!ownerInFront() && Date.now() < deadline);
+    return {ok: ownerInFront(), reclaimed: true};
   },
 
   closeTab(browserName, windowIndex, tabIndex) {
@@ -378,7 +416,13 @@ const Navegosa = {
   // Player-level fullscreen is unreachable: synthetic clicks carry no
   // user activation, so the Fullscreen API rejects (fullscreenerror).
   // Instead toggle macOS window fullscreen via System Events AXFullScreen,
-  // which needs Accessibility permission for osascript.
+  // which needs Accessibility permission for osascript.  The browser
+  // names its window by the tab title while the AX title appends
+  // status and app suffixes ("... - Audio playing - Brave"), hence the
+  // prefix match; a fullscreen window also grows unnamed AXUnknown
+  // siblings, hence only standard windows qualify.  Entering
+  // fullscreen activates the browser once the animation ends - the
+  // caller pairs this with reclaimFocus.
   windowFullscreenToggle(browserName, windowIndex) {
     const browser = Application(browserName);
     const wins = browser.windows();
@@ -387,12 +431,10 @@ const Navegosa = {
     try {
       const se = Application("System Events");
       const proc = se.processes.byName(browserName.replace(/\.app$/, ""));
-      const seWins = proc.windows();
-      let target = null;
-      for (let i = 0; i < seWins.length; i++) {
-        if (seWins[i].name() === winName) { target = seWins[i]; break; }
-      }
-      if (!target && seWins.length) target = seWins[0];
+      const standard = proc.windows().filter(w => {
+        try { return w.subrole() === "AXStandardWindow"; } catch (_) { return false; }
+      });
+      const target = standard.find(w => w.name().startsWith(winName)) || standard[0];
       if (!target) return {error: "No browser window found via System Events"};
       const attr = target.attributes.byName("AXFullScreen");
       const next = !attr.value();

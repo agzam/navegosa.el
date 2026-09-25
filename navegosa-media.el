@@ -258,14 +258,15 @@ instead, synchronously (in-process D-Bus needs no subprocess)."
 ;;;###autoload
 (defun navegosa-media-select-tab ()
   "Pick the media tab to control and bring it up in the browser.
-Always prompts, a single candidate showing as the one choice.  On
-the MPRIS lane this picks among active players instead; raising
-the window is not in the protocol."
+Always prompts, a single candidate showing as the one choice.  The
+tab is shown in its window without activating the browser app, so
+Emacs keeps keyboard focus.  On the MPRIS lane this picks among
+active players instead; raising the window is not in the protocol."
   (interactive)
   (if (navegosa-media--use-mpris-p)
       (navegosa-mpris-select-player)
     (let ((tab (navegosa-media--locate 'prompt)))
-      (navegosa--run "activateTab" (navegosa--browser)
+      (navegosa--run "showTab" (navegosa--browser)
                      (plist-get tab :windowIndex)
                      (plist-get tab :tabIndex))
       (message "navegosa-media: controlling %s" (plist-get tab :title)))))
@@ -369,12 +370,16 @@ the click registers and takes effect once the tab is shown."
   "Toggle macOS fullscreen on the window holding the media tab.
 The player's own fullscreen is unreachable (synthetic clicks carry
 no user activation), so this drives the window via System Events -
-requires Accessibility permission for osascript."
+requires Accessibility permission for osascript.  Entering
+fullscreen activates the browser when the animation ends, so a
+`navegosa--reclaim-focus' watcher is started first to hand
+keyboard focus straight back to Emacs."
   (interactive)
   (when (navegosa-media--use-mpris-p)
     (user-error
      "navegosa-mpris: fullscreen unsupported on this backend (MPRIS has no window surface)"))
   (let ((tab (navegosa-media--ensure-tab)))
+    (navegosa--reclaim-focus)
     (navegosa-media--call-async
      "windowFullscreenToggle"
      (list (navegosa--browser) (plist-get tab :windowIndex))
@@ -416,10 +421,13 @@ dropped."
 
 ;;;###autoload
 (defun navegosa-media-open-tab ()
-  "Activate the controlled media tab in the browser."
+  "Show the controlled media tab in its browser window.
+The browser app is not activated, so Emacs keeps keyboard focus;
+the tab becomes visible wherever its window is on screen, which is
+what a never-shown YouTube tab needs before it loads media."
   (interactive)
   (let ((tab (navegosa-media--ensure-tab)))
-    (navegosa--run "activateTab" (navegosa--browser)
+    (navegosa--run "showTab" (navegosa--browser)
                    (plist-get tab :windowIndex)
                    (plist-get tab :tabIndex))))
 

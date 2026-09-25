@@ -808,6 +808,7 @@
   (it "toggles fullscreen on the media tab's window"
     (let ((sent nil))
       (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'navegosa--reclaim-focus)
       (spy-on 'navegosa-media--call-async
               :and-call-fake
               (lambda (fn args callback)
@@ -818,8 +819,25 @@
       (expect sent :to-equal '("windowFullscreenToggle" ("Safari" 2)))
       (expect 'message :to-have-been-called-with "Fullscreen: %s" "on")))
 
+  (it "starts the focus watcher before the toggle"
+    ;; The transition activates the browser ~2s after the reply; the
+    ;; watcher must already be running so no keystroke lands there.
+    (let ((order nil))
+      (spy-on 'navegosa--browser :and-return-value "Safari")
+      (spy-on 'navegosa--reclaim-focus
+              :and-call-fake (lambda () (push 'reclaim order)))
+      (spy-on 'navegosa-media--call-async
+              :and-call-fake
+              (lambda (_fn _args callback)
+                (push 'toggle order)
+                (funcall callback '(:ok t :fullscreen t) nil)))
+      (spy-on 'message)
+      (navegosa-media-fullscreen-toggle)
+      (expect (nreverse order) :to-equal '(reclaim toggle))))
+
   (it "surfaces the accessibility-permission error"
     (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'navegosa--reclaim-focus)
     (spy-on 'navegosa-media--call-async
             :and-call-fake
             (lambda (_fn _args callback)
@@ -849,18 +867,20 @@
     (expect (navegosa-media-copy-url) :to-throw 'user-error)))
 
 (describe "navegosa-media-open-tab"
-  (it "activates the cached tab"
+  (it "shows the cached tab without activating the browser app"
+    ;; showTab, not activateTab: Emacs must keep keyboard focus.
     (let ((navegosa-media--tab '(:windowIndex 2 :tabIndex 7)))
       (spy-on 'navegosa--run)
       (spy-on 'navegosa--browser :and-return-value "Safari")
       (navegosa-media-open-tab)
-      (expect 'navegosa--run :to-have-been-called-with "activateTab" "Safari" 2 7))))
+      (expect 'navegosa--run :to-have-been-called-with "showTab" "Safari" 2 7)
+      (expect 'navegosa--run :not :to-have-been-called-with "activateTab" "Safari" 2 7))))
 
 (describe "navegosa-media-select-tab"
   (before-each (spy-on 'navegosa-media--use-mpris-p :and-return-value nil))
   (after-each (setq navegosa-media--tab nil))
 
-  (it "prompts and brings the picked tab up in the browser"
+  (it "prompts and shows the picked tab without activating the browser app"
     (spy-on 'navegosa-media--locate
             :and-call-fake
             (lambda (&optional _mode)
@@ -869,7 +889,77 @@
     (spy-on 'navegosa--browser :and-return-value "Safari")
     (navegosa-media-select-tab)
     (expect 'navegosa-media--locate :to-have-been-called-with 'prompt)
-    (expect 'navegosa--run :to-have-been-called-with "activateTab" "Safari" 1 5)))
+    (expect 'navegosa--run :to-have-been-called-with "showTab" "Safari" 1 5)
+    (expect 'navegosa--run :not :to-have-been-called-with "activateTab" "Safari" 1 5)))
+
+(defun navegosa-tests--js-method (name)
+  "Return the source text of Navegosa method NAME from the scripts file.
+Methods sit at two-space indentation and close with a `  }' line.
+Reads the file itself: other suites stub the scripts cache."
+  (let* ((js (let ((navegosa--scripts-cache nil)) (navegosa--load-scripts)))
+         (start (string-match (concat "^  " (regexp-quote name) "(") js))
+         (end (and start (string-match "^  }" js start))))
+    (unless end (error "No Navegosa.%s in navegosa-scripts.js" name))
+    (substring js start end)))
+
+(describe "navegosa-media focus contract"
+  ;; Every JXA entry point the media lane calls must leave keyboard
+  ;; focus with Emacs: activateTab is the one script that activates
+  ;; the browser app, and only the general tab switchers may use it.
+  (it "never names activateTab in navegosa-media.el"
+    (let ((source (with-temp-buffer
+                    (insert-file-contents
+                     (expand-file-name "navegosa-media.el"
+                                       (file-name-directory (navegosa--scripts-file))))
+                    (buffer-string))))
+      (expect source :not :to-match "\"activateTab\"")))
+
+  (it "showTab never activates the browser app"
+    (expect (navegosa-tests--js-method "showTab") :not :to-match "activate("))
+
+  (it "activateTab is showTab plus app activation"
+    (let ((src (navegosa-tests--js-method "activateTab")))
+      (expect src :to-match "this\\.showTab(")
+      (expect src :to-match "\\.activate()")))
+
+  (it "ships a reclaimFocus watcher that re-activates by pid"
+    ;; activateWithOptions is refused under macOS cooperative
+    ;; activation; the AppleScript activate command is honored.
+    (let ((src (navegosa-tests--js-method "reclaimFocus")))
+      (expect src :to-match "Application(pid)")
+      (expect src :to-match "\\.activate()")
+      (expect src :not :to-match "activateWithOptions")))
+
+  (it "polls the frontmost app between run-loop spins, never bare delay()"
+    ;; NSWorkspace.frontmostApplication refreshes only while the run
+    ;; loop spins; a delay()-based poll kept reading Emacs while the
+    ;; browser sat in front, so the watcher never fired.
+    (let ((src (navegosa-tests--js-method "reclaimFocus")))
+      (expect src :to-match "runUntilDate")
+      (expect src :not :to-match "delay(")))
+
+  (it "reclaims only from the browser, matched by bundle id"
+    ;; A deliberate switch to another app within the wait stands.
+    (let ((src (navegosa-tests--js-method "reclaimFocus")))
+      (expect src :to-match "Application(browserName)\\.id()")
+      (expect src :to-match "bundleIdentifier")))
+
+  (it "targets only standard windows by title prefix for fullscreen"
+    ;; AX titles carry status suffixes and fullscreen adds unnamed
+    ;; AXUnknown siblings; an exact-name match with a [0] fallback
+    ;; flipped the wrong window.
+    (let ((src (navegosa-tests--js-method "windowFullscreenToggle")))
+      (expect src :to-match "AXStandardWindow")
+      (expect src :to-match "startsWith(winName)"))))
+
+(describe "navegosa--reclaim-focus"
+  (it "fires the watcher with the browser, Emacs's pid and the wait in ms"
+    (spy-on 'navegosa--run-async)
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (let ((navegosa-reclaim-focus-wait 2.5))
+      (navegosa--reclaim-focus))
+    (expect 'navegosa--run-async
+            :to-have-been-called-with "reclaimFocus" "Safari" (emacs-pid) 2500)))
 
 (describe "navegosa-media-open-url"
   (before-each (spy-on 'navegosa-media--use-mpris-p :and-return-value nil))

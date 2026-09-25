@@ -170,6 +170,23 @@ Fire-and-forget: does not block Emacs, discards output."
     (process-send-string proc (navegosa--build-script fn args))
     (process-send-eof proc)))
 
+(defcustom navegosa-reclaim-focus-wait 4.0
+  "Seconds `navegosa--reclaim-focus' watches for the browser to take focus.
+A macOS fullscreen transition activates the browser only when its
+animation ends, about a second after the command returns."
+  :type 'number)
+
+(defun navegosa--reclaim-focus ()
+  "Give keyboard focus back to Emacs the moment the browser takes it.
+Fire-and-forget: a JXA watcher polls the frontmost app for
+`navegosa-reclaim-focus-wait' seconds and re-activates Emacs as
+soon as the browser is in front; other apps are left alone, so a
+deliberate switch elsewhere stands.  Call it before an operation
+whose side effect activates the browser after the Apple Event has
+returned."
+  (navegosa--run-async "reclaimFocus" (navegosa--browser) (emacs-pid)
+                       (round (* 1000 navegosa-reclaim-focus-wait))))
+
 ;;;; Browser detection
 
 (defun navegosa--detect-browser ()
