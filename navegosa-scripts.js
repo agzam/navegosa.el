@@ -45,33 +45,37 @@ const Navegosa = {
     return shown;
   },
 
-  // Watch for up to waitMs and, the moment the browser takes keyboard
-  // focus, hand it back to the process pid (Emacs).  Runs as its own
-  // fire-and-forget osascript next to an operation that activates the
-  // browser after its Apple Event has returned: entering macOS
-  // fullscreen activates the browser when the animation ends, about a
-  // second later.  Every wait spins the run loop: NSWorkspace refreshes
+  // Wait while spinning the run loop.  NSWorkspace refreshes
   // frontmostApplication from run-loop notifications and delay() does
-  // not spin it, so a poll built on delay() keeps reading its first
-  // value.  The AppleScript activate command does the handing back;
+  // not spin the run loop, so a poll built on delay() keeps reading its
+  // first value.
+  _spin(seconds) {
+    ObjC.import("Foundation");
+    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(seconds));
+  },
+
+  // For waitMs, hand keyboard focus back to the process pid (Emacs)
+  // every time the browser takes it.  Runs as its own fire-and-forget
+  // osascript next to an operation that activates the browser after its
+  // Apple Event has returned: entering fullscreen activates the browser
+  // twice, on the request and again when the animation ends ~0.7s
+  // later, so the watch never ends early.  The AppleScript activate
+  // command does the handing back;
   // NSRunningApplication.activateWithOptions is refused under
   // cooperative activation.
   reclaimFocus(browserName, pid, waitMs) {
     ObjC.import("AppKit");
     const ws = $.NSWorkspace.sharedWorkspace;
-    const wait = s => $.NSRunLoop.currentRunLoop.runUntilDate(
-      $.NSDate.dateWithTimeIntervalSinceNow(s));
     const browserId = Application(browserName).id();
-    const ownerInFront = () => ws.frontmostApplication.processIdentifier === pid;
-    let deadline = Date.now() + waitMs;
-    while (ws.frontmostApplication.bundleIdentifier.js !== browserId) {
-      if (deadline < Date.now()) return {ok: true, reclaimed: false};
-      wait(0.05);
-    }
+    const browserInFront = () => ws.frontmostApplication.bundleIdentifier.js === browserId;
     const owner = Application(pid);
-    deadline = Date.now() + 3000;
-    do { owner.activate(); wait(0.2); } while (!ownerInFront() && Date.now() < deadline);
-    return {ok: ownerInFront(), reclaimed: true};
+    let reclaims = 0;
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      if (browserInFront()) { owner.activate(); reclaims++; this._spin(0.2); }
+      else this._spin(0.05);
+    }
+    return {ok: !browserInFront(), reclaims: reclaims};
   },
 
   closeTab(browserName, windowIndex, tabIndex) {
@@ -301,6 +305,7 @@ const Navegosa = {
       var cmd = ${JSON.stringify(cmd)};
       var arg = ${JSON.stringify(arg === undefined ? null : arg)};
       var warning = null;
+      var fullscreen = !!document.fullscreenElement;
       function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
       switch (cmd) {
         case 'status':
@@ -352,6 +357,19 @@ const Navegosa = {
           if (sz) sz.click(); else warning = 'no theater button';
           break;
         }
+        case 'fullscreenToggle': {
+          // Entering needs transient user activation, which
+          // mediaFullscreenToggle supplies with a key posted to the
+          // browser first; exiting needs none.
+          if (fullscreen) { document.exitFullscreen(); fullscreen = false; break; }
+          if (!navigator.userActivation.isActive)
+            return JSON.stringify({error: 'Fullscreen needs a user gesture and the page got no key event - ' +
+              'grant osascript Accessibility permission, and keep focus off the address bar'});
+          var fb = document.querySelector('.ytp-fullscreen-button');
+          if (fb) fb.click(); else v.requestFullscreen();
+          fullscreen = true;
+          break;
+        }
         default:
           return JSON.stringify({error: 'Unknown media command: ' + cmd});
       }
@@ -361,7 +379,8 @@ const Navegosa = {
         rate: v.playbackRate,
         paused: v.paused,
         volume: v.volume,
-        muted: v.muted
+        muted: v.muted,
+        fullscreen: fullscreen
       };
       if (warning) out.warning = warning;
       return JSON.stringify(out);
@@ -393,6 +412,44 @@ const Navegosa = {
     return this.mediaCommand(browserName, windowIndex, tabIndex, "status", null);
   },
 
+  // Player fullscreen needs transient user activation, which JS run
+  // from Apple Events never has.  A key posted to the browser process
+  // is real input to its front tab even while the browser stays in the
+  // background: F19, which no page, extension or browser binding
+  // claims, gives the tab a few seconds of activation, and the
+  // player's own fullscreen button, clicked from the isolated world,
+  // then enters fullscreen.  Posting events needs Accessibility
+  // permission for osascript.  Entering fullscreen activates the
+  // browser twice (on the request and when the animation ends), so the
+  // caller runs reclaimFocus alongside.
+  mediaFullscreenToggle(browserName, windowIndex, tabIndex) {
+    const shown = this.showTab(browserName, windowIndex, tabIndex);
+    if (shown.error) return shown;
+    const browser = Application(browserName);
+    const tab = browser.windows()[windowIndex - 1].tabs()[tabIndex - 1];
+    const inFullscreen = () => tab.execute({javascript: "!!document.fullscreenElement"});
+    if (!inFullscreen()) {
+      ObjC.import("AppKit");
+      ObjC.import("CoreGraphics");
+      const pid = $.NSRunningApplication
+        .runningApplicationsWithBundleIdentifier(browser.id()).objectAtIndex(0).processIdentifier;
+      const F19 = 80;
+      $.CGEventPostToPid(pid, $.CGEventCreateKeyboardEvent(null, F19, true));
+      $.CGEventPostToPid(pid, $.CGEventCreateKeyboardEvent(null, F19, false));
+      const activationDeadline = Date.now() + 500;
+      while (!tab.execute({javascript: "navigator.userActivation.isActive"}) &&
+             Date.now() < activationDeadline)
+        this._spin(0.0125);
+    }
+    const state = this.mediaCommand(browserName, windowIndex, tabIndex, "fullscreenToggle", null);
+    if (state.error) return state;
+    const deadline = Date.now() + 1000;
+    while (inFullscreen() !== state.fullscreen && Date.now() < deadline) this._spin(0.025);
+    if (inFullscreen() !== state.fullscreen)
+      return {error: "The page did not " + (state.fullscreen ? "enter" : "leave") + " fullscreen"};
+    return state;
+  },
+
   // Open url as the front tab of the frontmost window: tabs.push
   // activates the new tab in-window, and the browser app itself is NOT
   // activated - Emacs keeps focus.  Media loads as long as the browser
@@ -411,38 +468,5 @@ const Navegosa = {
       url: url,
       title: ""
     };
-  },
-
-  // Player-level fullscreen is unreachable: synthetic clicks carry no
-  // user activation, so the Fullscreen API rejects (fullscreenerror).
-  // Instead toggle macOS window fullscreen via System Events AXFullScreen,
-  // which needs Accessibility permission for osascript.  The browser
-  // names its window by the tab title while the AX title appends
-  // status and app suffixes ("... - Audio playing - Brave"), hence the
-  // prefix match; a fullscreen window also grows unnamed AXUnknown
-  // siblings, hence only standard windows qualify.  Entering
-  // fullscreen activates the browser once the animation ends - the
-  // caller pairs this with reclaimFocus.
-  windowFullscreenToggle(browserName, windowIndex) {
-    const browser = Application(browserName);
-    const wins = browser.windows();
-    if (wins.length < windowIndex) return {error: "Window index out of range"};
-    const winName = wins[windowIndex - 1].name();
-    try {
-      const se = Application("System Events");
-      const proc = se.processes.byName(browserName.replace(/\.app$/, ""));
-      const standard = proc.windows().filter(w => {
-        try { return w.subrole() === "AXStandardWindow"; } catch (_) { return false; }
-      });
-      const target = standard.find(w => w.name().startsWith(winName)) || standard[0];
-      if (!target) return {error: "No browser window found via System Events"};
-      const attr = target.attributes.byName("AXFullScreen");
-      const next = !attr.value();
-      attr.value = next;
-      return {ok: true, fullscreen: next};
-    } catch (e) {
-      return {error: "Window fullscreen needs Accessibility permission for osascript " +
-              "(System Settings > Privacy & Security > Accessibility): " + String(e)};
-    }
   }
 };

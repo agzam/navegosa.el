@@ -367,13 +367,13 @@ the click registers and takes effect once the tab is shown."
 
 ;;;###autoload
 (defun navegosa-media-fullscreen-toggle ()
-  "Toggle macOS fullscreen on the window holding the media tab.
-The player's own fullscreen is unreachable (synthetic clicks carry
-no user activation), so this drives the window via System Events -
-requires Accessibility permission for osascript.  Entering
-fullscreen activates the browser when the animation ends, so a
-`navegosa--reclaim-focus' watcher is started first to hand
-keyboard focus straight back to Emacs."
+  "Toggle the player's own fullscreen in the controlled media tab.
+The Fullscreen API demands a user gesture that JS from Apple
+Events never carries; a key posted to the browser process supplies
+one without activating the browser, which needs Accessibility
+permission for osascript.  Entering fullscreen activates the
+browser anyway, twice, so a `navegosa--reclaim-focus' watcher runs
+alongside and hands keyboard focus back to Emacs each time."
   (interactive)
   (when (navegosa-media--use-mpris-p)
     (user-error
@@ -381,13 +381,15 @@ keyboard focus straight back to Emacs."
   (let ((tab (navegosa-media--ensure-tab)))
     (navegosa--reclaim-focus)
     (navegosa-media--call-async
-     "windowFullscreenToggle"
-     (list (navegosa--browser) (plist-get tab :windowIndex))
-     (lambda (result err)
+     "mediaFullscreenToggle"
+     (list (navegosa--browser)
+           (plist-get tab :windowIndex)
+           (plist-get tab :tabIndex))
+     (lambda (state err)
        (if err
            (message "navegosa-media: %s" err)
          (message "Fullscreen: %s"
-                  (if (plist-get result :fullscreen) "on" "off")))))))
+                  (if (plist-get state :fullscreen) "on" "off")))))))
 
 (defun navegosa-media--timestamped-url (url secs)
   "Return URL with a t=SECS timestamp.

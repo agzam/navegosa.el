@@ -109,7 +109,7 @@ Events (see below). Works on background tabs - no focus stealing.
 | ~navegosa-media-next~              | Next video (YouTube)                       |
 | ~navegosa-media-prev~              | Previous video (YouTube, playlists only)   |
 | ~navegosa-media-theater-toggle~    | Toggle YouTube theater mode                |
-| ~navegosa-media-fullscreen-toggle~ | Toggle macOS window fullscreen             |
+| ~navegosa-media-fullscreen-toggle~ | Toggle the player's fullscreen             |
 | ~navegosa-media-copy-url~          | Copy URL timestamped at current position   |
 | ~navegosa-media-status~            | Echo position/rate/volume/title            |
 | ~navegosa-media-select-tab~        | Pick a media tab (always prompts), show it |
@@ -134,7 +134,7 @@ against a freshly located tab.  Every call is deadline-guarded.
 
 Note: a YouTube tab that has never been focused does not load its video (the player defers loading until the tab is visible).  Commands report it distinctly; use ~navegosa-media-open-tab~ once to start it.  It shows the tab without activating the browser, so the browser window must be visible on screen.
 
-Fullscreen note: the player's own fullscreen cannot be triggered from Apple Events (no user activation), so ~navegosa-media-fullscreen-toggle~ toggles macOS window fullscreen via System Events instead.  That requires Accessibility permission for =osascript= (System Settings -> Privacy & Security -> Accessibility); without it the command reports what to enable.  Entering fullscreen activates the browser when the animation ends; the command hands keyboard focus straight back to Emacs (it watches for ~navegosa-reclaim-focus-wait~ seconds).  Combine with theater mode for a near-fullscreen video.
+Fullscreen note: ~navegosa-media-fullscreen-toggle~ toggles the player's own fullscreen (YouTube's fullscreen button, else the video element).  The Fullscreen API needs a user gesture, which JavaScript from Apple Events never carries, so the command first posts a key (F19) to the browser process; the page takes it as real input while the browser stays in the background.  Posting keys requires Accessibility permission for =osascript= (System Settings -> Privacy & Security -> Accessibility); without it the command reports that the page got no key event.  Entering fullscreen activates the browser twice; the command hands keyboard focus straight back to Emacs each time (it watches for ~navegosa-reclaim-focus-wait~ seconds).
 
 *** Linux (MPRIS)
 

@@ -805,7 +805,7 @@
     (setq navegosa-media--tab '(:windowIndex 2 :tabIndex 7)))
   (after-each (setq navegosa-media--tab nil))
 
-  (it "toggles fullscreen on the media tab's window"
+  (it "toggles the player's fullscreen in the media tab"
     (let ((sent nil))
       (spy-on 'navegosa--browser :and-return-value "Safari")
       (spy-on 'navegosa--reclaim-focus)
@@ -813,14 +813,25 @@
               :and-call-fake
               (lambda (fn args callback)
                 (setq sent (list fn args))
-                (funcall callback '(:ok t :fullscreen t) nil)))
+                (funcall callback '(:time 5 :fullscreen t) nil)))
       (spy-on 'message)
       (navegosa-media-fullscreen-toggle)
-      (expect sent :to-equal '("windowFullscreenToggle" ("Safari" 2)))
+      (expect sent :to-equal '("mediaFullscreenToggle" ("Safari" 2 7)))
       (expect 'message :to-have-been-called-with "Fullscreen: %s" "on")))
 
+  (it "echoes off when the player left fullscreen"
+    (spy-on 'navegosa--browser :and-return-value "Safari")
+    (spy-on 'navegosa--reclaim-focus)
+    (spy-on 'navegosa-media--call-async
+            :and-call-fake
+            (lambda (_fn _args callback)
+              (funcall callback '(:time 5 :fullscreen nil) nil)))
+    (spy-on 'message)
+    (navegosa-media-fullscreen-toggle)
+    (expect 'message :to-have-been-called-with "Fullscreen: %s" "off"))
+
   (it "starts the focus watcher before the toggle"
-    ;; The transition activates the browser ~2s after the reply; the
+    ;; Entering activates the browser on the request itself; the
     ;; watcher must already be running so no keystroke lands there.
     (let ((order nil))
       (spy-on 'navegosa--browser :and-return-value "Safari")
@@ -835,17 +846,17 @@
       (navegosa-media-fullscreen-toggle)
       (expect (nreverse order) :to-equal '(reclaim toggle))))
 
-  (it "surfaces the accessibility-permission error"
+  (it "surfaces the missing-gesture error"
     (spy-on 'navegosa--browser :and-return-value "Safari")
     (spy-on 'navegosa--reclaim-focus)
     (spy-on 'navegosa-media--call-async
             :and-call-fake
             (lambda (_fn _args callback)
-              (funcall callback nil "needs Accessibility permission")))
+              (funcall callback nil "Fullscreen needs a user gesture")))
     (spy-on 'message)
     (navegosa-media-fullscreen-toggle)
     (expect 'message :to-have-been-called-with
-            "navegosa-media: %s" "needs Accessibility permission")))
+            "navegosa-media: %s" "Fullscreen needs a user gesture")))
 
 (describe "navegosa-media-copy-url"
   (it "kills a timestamped URL built from returned state"
@@ -935,8 +946,17 @@ Reads the file itself: other suites stub the scripts cache."
     ;; loop spins; a delay()-based poll kept reading Emacs while the
     ;; browser sat in front, so the watcher never fired.
     (let ((src (navegosa-tests--js-method "reclaimFocus")))
-      (expect src :to-match "runUntilDate")
-      (expect src :not :to-match "delay(")))
+      (expect src :to-match "this\\._spin(")
+      (expect src :not :to-match "delay("))
+    (expect (navegosa-tests--js-method "_spin") :to-match "runUntilDate"))
+
+  (it "keeps reclaiming until its deadline"
+    ;; Entering fullscreen activates the browser twice: on the request
+    ;; and when the animation ends.  A watcher that stopped after the
+    ;; first reclaim left the second one standing.
+    (let ((src (navegosa-tests--js-method "reclaimFocus")))
+      (expect src :to-match "while (Date\\.now() < deadline)")
+      (expect src :not :to-match "return {ok: true, reclaimed")))
 
   (it "reclaims only from the browser, matched by bundle id"
     ;; A deliberate switch to another app within the wait stands.
@@ -944,13 +964,30 @@ Reads the file itself: other suites stub the scripts cache."
       (expect src :to-match "Application(browserName)\\.id()")
       (expect src :to-match "bundleIdentifier")))
 
-  (it "targets only standard windows by title prefix for fullscreen"
-    ;; AX titles carry status suffixes and fullscreen adds unnamed
-    ;; AXUnknown siblings; an exact-name match with a [0] fallback
-    ;; flipped the wrong window.
-    (let ((src (navegosa-tests--js-method "windowFullscreenToggle")))
-      (expect src :to-match "AXStandardWindow")
-      (expect src :to-match "startsWith(winName)"))))
+  (it "gets the fullscreen gesture from a key posted to the browser process"
+    ;; JS from Apple Events carries no user activation; a key posted
+    ;; with CGEventPostToPid does, and it never activates the browser.
+    (let ((src (navegosa-tests--js-method "mediaFullscreenToggle")))
+      (expect src :to-match "this\\.showTab(")
+      (expect src :to-match "CGEventPostToPid")
+      (expect src :to-match "navigator\\.userActivation\\.isActive")
+      (expect src :to-match "\"fullscreenToggle\"")
+      (expect src :not :to-match "\\.activate()")))
+
+  (it "toggles the player's own fullscreen in the page"
+    ;; Exiting needs no gesture; entering refuses without one instead
+    ;; of failing silently, and prefers YouTube's own button.
+    (let ((src (navegosa-tests--js-method "_mediaJS")))
+      (expect src :to-match "case 'fullscreenToggle'")
+      (expect src :to-match "document\\.exitFullscreen()")
+      (expect src :to-match "\\.ytp-fullscreen-button")
+      (expect src :to-match "fullscreen: fullscreen")))
+
+  (it "never falls back to macOS window fullscreen"
+    ;; Window fullscreen maximizes the browser; the video must be
+    ;; what goes fullscreen.
+    (expect (let ((navegosa--scripts-cache nil)) (navegosa--load-scripts))
+            :not :to-match "AXFullScreen")))
 
 (describe "navegosa--reclaim-focus"
   (it "fires the watcher with the browser, Emacs's pid and the wait in ms"
