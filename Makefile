@@ -37,7 +37,7 @@ test: $(ELPA_DIR)
 	-l navegosa-mpris.el \
 	-l test/navegosa-tests.el \
 	--funcall buttercup-run
-	node --test test/
+	node --test test/*.test.js
 
 check-autoloads:
 	@echo "Generating and loading autoloads..."
