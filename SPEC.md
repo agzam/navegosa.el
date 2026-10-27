@@ -182,10 +182,21 @@ What MPRIS cannot carry rides two side lanes; only what no lane can honor still 
 - The sink-input exists only while audio flows: appears when playback starts, survives a pause briefly, disappears after longer idle. Volume/mute answer honestly ("no audio stream") when it is gone.
 - Injected keys land in the window's active tab exactly like typed input: the video's tab must be frontmost in its window (enforced by the title match, honest error otherwise), and page-key interceptors must be excluded on the site - with default bindings Vimium-C's `t` opens a new tab instead of theater.
 
+## V6: target the playing tab
+
+- [done] Root cause of "play/pause resumes a random video": the cache kept `windowIndex`/`tabIndex`, `browser.windows()` follows z-order and tab indices shift on every open/close/move, so the cache silently addressed another tab; the retry took the first candidate.
+- [done] JS `mediaRun(browser, urlPattern, pickId, lastId, skipIds, cmd, arg)` - one osascript call: bulk tab listing (`tabs.id()/url()/name()` per window), an in-process playing check per tab (about 4ms each; list plus 4 checks 88-109ms inside Brave), `_pickTarget` (pick > playing, last first > last > shown > only one > ask), then the command. `list`, `pick` and `pauseAll` are pseudo-commands.
+- [done] Play/pause never leaves two videos playing: other playing tabs get `pause` first, then the target toggles.
+- [done] Tabs by id: `_tabById`, `showTabById`, `mediaFullscreenToggle(browser, tabId)`, `openMediaTab` returns the new id. `mediaCommand`/`mediaStatus` removed.
+- [done] Unloaded (Memory Saver) tabs: `console.log("probe ID")` before each check streams on stderr; `navegosa-media--run` kills a call silent past `navegosa-media-check-timeout` (0.75s), skips that id for 60s (still checked while shown) and retries once.
+- [done] `navegosa-media-select-tab` marks playing tabs with ♫ and sets the pick; `navegosa-media-clear-pick` drops it; `navegosa-media-pause` with a handler hands over URL, time and rate; `navegosa-media-open-url` pauses playing tabs first. The prompt for an undecidable first target runs in the command (`navegosa-media--settle-target`), never in a sentinel.
+- [done] `navegosa-media-play-url-at(url, time, rate)` continues a video from another player: JS `findMediaTab` matches media tabs by URL alone (`_sameMedia`: YouTube video id, else the URL up to the fragment) and refuses a URL no pattern matches; the found tab is picked and shown, else `navegosa-media-open-url` opens the timestamped URL. Then `mediaRun` `playAt` with `[time, rate]` (`navegosa--to-js` serializes vectors as arrays) acts only on the pick, pauses other playing tabs like play/pause, and `navegosa-media--play-at` retries every 0.5s, 20 tries, while the tab has no video yet.
+- [done] Tests: buttercup for the elisp (stall and retry against real `sh` subprocesses), `node --test test/` drives `mediaRun` against a fake browser.
+
 ## Deferred
 
-- Media: skip known-bad candidates on retry; prefer :active tab in auto-locate
-- Media: disambiguation when several tabs are actually playing (probe candidates, completing-read)
+- Media: skip known-bad candidates on retry; prefer :active tab in auto-locate (superseded by V6)
+- Media: disambiguation when several tabs are actually playing (done in V6: the last controlled wins, play/pause silences the rest)
 - Tab groups (Chrome/Brave expose via JXA; Safari doesn't; Arc has "spaces" with thin JXA)
 - Search text across all tabs (execute JS in each tab, collect matches)
 - Scroll-to-text / consult-line style live search (latency concern: ~50-100ms per osascript call, needs debounce ~200-300ms or grab-text-then-search-locally approach)
@@ -250,4 +261,5 @@ Next actions:
 - 2026-08-05: v4 MPRIS lane. navegosa-mpris.el, per-OS transport routing, status-filtered discovery, SetPosition-only seeking, honest degradation, mocked-D-Bus specs, live E2E on the Linux box. Version 0.4.0.
 - 2026-08-05: v5 Linux gap lanes. pactl stream volume/mute (PA-mute keeps the MPRIS session alive), navegosa-keysend.el compositor key delivery (Hyprland batched focus-bounce - Chromium ignores unfocused synthetic keys; SHIFT specs for shifted keysyms), speed via page keys by direction, 20 new specs, live E2E incl. held-key volume glide. Version 0.5.0.
 - 2026-09-25: focus stays in Emacs. `showTab` replaces `activateTab` in the media lane, `reclaimFocus` watcher hands focus back after the fullscreen transition activates the browser (run-loop-spun poll - a `delay()` poll reads a stale frontmost app), fullscreen targets the standard window by title prefix. 9 new specs, live E2E on Brave across two displays.
+- 2026-10-26: v6 - commands target the playing tab. One `mediaRun` call per command, tabs by id, play/pause exclusive, ♫ in the tab picker, pause hand-off, unloaded-tab skip; node suite for the JS. 152 buttercup specs plus 13 node tests.
 - 2026-09-25 (later): player fullscreen replaces window fullscreen. A `CGEventPostToPid` key gives the page the user activation the Fullscreen API needs without activating the browser; YouTube's button does the rest, `exitFullscreen()` undoes it. `reclaimFocus` now reclaims until its deadline, since entering activates the browser twice. `windowFullscreenToggle` removed. 141 specs.

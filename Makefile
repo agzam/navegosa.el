@@ -1,6 +1,8 @@
 ELPA_DIR = $(CURDIR)/.elpa
+# -Q and --batch still resolve user-emacs-directory to ~/.emacs.d
+SANDBOX_DIR = $(CURDIR)/.emacs-batch
 
-EMACS_BATCH = emacs -Q --batch \
+EMACS_BATCH = emacs -Q --batch --init-directory=$(SANDBOX_DIR) \
 	--eval "(setq package-user-dir \"$(ELPA_DIR)\")" \
 	--eval "(require 'package)" \
 	--eval "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\"))" \
@@ -35,11 +37,12 @@ test: $(ELPA_DIR)
 	-l navegosa-mpris.el \
 	-l test/navegosa-tests.el \
 	--funcall buttercup-run
+	node --test test/
 
 check-autoloads:
 	@echo "Generating and loading autoloads..."
 	rm -f navegosa-autoloads.el
-	emacs -Q --batch \
+	emacs -Q --batch --init-directory=$(SANDBOX_DIR) \
 	--eval "(setq generated-autoload-file (expand-file-name \"navegosa-autoloads.el\" \"$(CURDIR)\"))" \
 	--eval "(update-directory-autoloads \"$(CURDIR)\")" \
 	--eval "(load generated-autoload-file nil 'nomessage)"
@@ -68,4 +71,4 @@ compile: $(ELPA_DIR)
 clean:
 	@echo "Cleaning compiled files..."
 	rm -f *.elc test/*.elc
-	rm -rf $(ELPA_DIR)
+	rm -rf $(ELPA_DIR) $(SANDBOX_DIR)

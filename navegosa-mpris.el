@@ -113,7 +113,7 @@ within the same rank."
      #'< names)))
 
 (defun navegosa-mpris--label (service)
-  "Completion label for SERVICE: identity and current title."
+  "Completion label for SERVICE: identity and current title, ♫ when playing."
   (let* ((identity (or (dbus-ignore-errors
                          (dbus-get-property
                           :session service navegosa-mpris--path
@@ -121,15 +121,18 @@ within the same rank."
                        service))
          (title (navegosa-mpris--metadata-get
                  (dbus-ignore-errors (navegosa-mpris--prop service "Metadata"))
-                 "xesam:title")))
-    (if title (format "%s | %s" identity title) identity)))
+                 "xesam:title"))
+         (playing (equal (dbus-ignore-errors
+                           (navegosa-mpris--prop service "PlaybackStatus"))
+                         "Playing")))
+    (concat (if playing "♫ " "")
+            (if title (format "%s | %s" identity title) identity))))
 
 (defun navegosa-mpris--locate (&optional mode)
   "Locate an active MPRIS player, cache and return its bus name.
-MODE mirrors `navegosa-media--locate': nil prompts only among
-several candidates, `auto' takes the best without prompting,
-`prompt' always prompts.  Signals `user-error' when no player has
-controllable media."
+MODE nil prompts only among several candidates, `auto' takes the
+best without prompting, `prompt' always prompts.  Signals
+`user-error' when no player has controllable media."
   (let ((cands (navegosa-mpris--services)))
     (setq navegosa-mpris--service
           (cond
@@ -318,6 +321,9 @@ pause/resume the flipped status."
              (navegosa-mpris--call service "PlayPause")
              (funcall handler (plist-put (navegosa-mpris--state service)
                                          :paused (not was-paused)))))
+          ("pause"
+           (navegosa-mpris--call service "Pause")
+           (funcall handler (plist-put (navegosa-mpris--state service) :paused t)))
           ("seekBy"
            (let* ((state (navegosa-mpris--state service))
                   (target (navegosa-mpris--set-position

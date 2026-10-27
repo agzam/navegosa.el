@@ -256,29 +256,125 @@ const Navegosa = {
   // URL prefilter only, no JS execution: executing into a discarded
   // (Memory Saver) tab hangs the osascript call indefinitely, so tabs
   // are never blind-probed.  urlPattern is a JS regex string.
+  // Ids, URLs and titles come in one Apple Event per window each.
   getMediaTabs(browserName, urlPattern) {
     const re = new RegExp(urlPattern, "i");
-    const browser = Application(browserName);
-    const wins = browser.windows();
-    if (!wins.length) return [];
     const result = [];
-    wins.forEach((win, winIdx) => {
+    Application(browserName).windows().forEach((win, winIdx) => {
       let activeIdx = -1;
       try { activeIdx = win.activeTabIndex(); } catch (_) {}
-      win.tabs().forEach((tab, tabIdx) => {
-        const url = tab.url();
-        if (url && re.test(url)) {
-          result.push({
-            windowIndex: winIdx + 1,
-            tabIndex: tabIdx + 1,
-            url: url,
-            title: tab.name(),
-            active: (tabIdx + 1) === activeIdx
-          });
-        }
+      const ids = win.tabs.id(), urls = win.tabs.url(), titles = win.tabs.name();
+      urls.forEach((url, i) => {
+        if (url && re.test(url))
+          result.push({id: ids[i], windowIndex: winIdx + 1, tabIndex: i + 1,
+                       url: url, title: titles[i], active: i + 1 === activeIdx});
       });
     });
     return result;
+  },
+
+  _probeJS: `(function() {
+    var vids = Array.prototype.slice.call(document.querySelectorAll('video'))
+      .filter(function(v) { return v.readyState > 0 || (v.duration || 0) > 0; });
+    return vids.some(function(v) { return !v.paused; }) ? 'playing' : 'paused';
+  })()`,
+
+  // A tab keeps its id while it moves; its indices shift with every
+  // tab opened, closed or dragged, and window order follows focus.
+  _tabById(browserName, id) {
+    const wins = Application(browserName).windows();
+    for (let w = 0; w < wins.length; w++) {
+      const i = wins[w].tabs.id().indexOf(id);
+      if (i >= 0) return {id: id, windowIndex: w + 1, tabIndex: i + 1, tab: wins[w].tabs[i]};
+    }
+    return null;
+  },
+
+  // The tab a command acts on: the picked one, else a playing one (the
+  // last controlled first), else the last controlled, else a shown one,
+  // else the only one.  Null means the caller has to ask.
+  _pickTarget(cands, pickId, lastId) {
+    const byId = (id) => cands.find((c) => c.id === id);
+    const playing = cands.filter((c) => c.playing);
+    return byId(pickId)
+      || playing.find((c) => c.id === lastId) || playing[0]
+      || byId(lastId)
+      || cands.find((c) => c.active)
+      || (cands.length === 1 ? cands[0] : null);
+  },
+
+  _runOn(browser, c, cmd, arg) {
+    const tab = browser.windows[c.windowIndex - 1].tabs.byId(c.id);
+    const resultStr = tab.execute({javascript: this._mediaJS(cmd, arg)});
+    if (!resultStr) return {error: "No result from tab"};
+    const state = JSON.parse(resultStr);
+    if (state.error) return state;
+    state.url = tab.url();
+    state.title = tab.name();
+    state.id = c.id;
+    return state;
+  },
+
+  // One call per media command: list the media tabs, check which play,
+  // pick the target, run cmd.  Each check is logged to stderr first: an
+  // unloaded (Memory Saver) tab never answers, and the caller kills the
+  // call and skips that tab.  Tabs in skipIds are checked only when shown.
+  mediaRun(browserName, urlPattern, pickId, lastId, skipIds, cmd, arg) {
+    const browser = Application(browserName);
+    const skip = (skipIds || "").split(",");
+    const cands = this.getMediaTabs(browserName, urlPattern);
+    if (!cands.length) return {error: "no media tabs open"};
+    cands.forEach((c) => {
+      if (c.active || skip.indexOf(c.id) < 0) {
+        console.log("probe " + c.id);
+        c.playing = browser.windows[c.windowIndex - 1].tabs.byId(c.id)
+          .execute({javascript: this._probeJS}) === "playing";
+      }
+    });
+    console.log("run");
+    if (cmd === "list") return {tabs: cands};
+    if (cmd === "pauseAll") {
+      const playing = cands.filter((c) => c.playing);
+      playing.forEach((c) => this._runOn(browser, c, "pause"));
+      return {paused: playing.length};
+    }
+    // playAt continues one video in the tab that shows it, never in another
+    if (cmd === "playAt" && !cands.some((c) => c.id === pickId))
+      return {error: "The media tab is gone"};
+    const target = this._pickTarget(cands, pickId, lastId);
+    if (!target) return {tabs: cands};
+    if (cmd === "pick") return {target: target};
+    // play-pause and playAt never leave two videos playing: they pause
+    // every other playing tab, then act on the target
+    if (cmd === "playPause" || cmd === "playAt")
+      cands.filter((c) => c.playing && c !== target)
+        .forEach((c) => this._runOn(browser, c, "pause"));
+    return this._runOn(browser, target, cmd, arg);
+  },
+
+  // Two URLs show the same media when their YouTube video ids match,
+  // else when they match up to the #fragment.
+  _sameMedia(a, b) {
+    const ytId = (url) =>
+      (url.match(/(?:youtube\.com\/watch\?(?:.*&)?v=|youtu\.be\/)([\w-]{11})/) || [])[1];
+    const idA = ytId(a), idB = ytId(b);
+    if (idA || idB) return idA === idB;
+    return a.split("#")[0] === b.split("#")[0];
+  },
+
+  // The media tab showing url's video, or null.  Found by URL alone, so
+  // an unloaded tab cannot hang the call.
+  findMediaTab(browserName, urlPattern, url) {
+    if (!new RegExp(urlPattern, "i").test(url))
+      return {error: "no navegosa-media-url-patterns entry matches " + url};
+    return this.getMediaTabs(browserName, urlPattern)
+      .find((c) => this._sameMedia(c.url, url)) || null;
+  },
+
+  showTabById(browserName, tabId) {
+    const found = this._tabById(browserName, tabId);
+    if (!found) return {error: "The media tab is gone"};
+    return this.showTab(browserName, found.windowIndex, found.tabIndex);
   },
 
   // Page-side JS for media ops.  Runs in the Apple-Events isolated
@@ -312,6 +408,14 @@ const Navegosa = {
           break;
         case 'playPause':
           if (v.paused) v.play(); else v.pause();
+          break;
+        case 'pause':
+          v.pause();
+          break;
+        case 'playAt':
+          v.currentTime = clamp(arg[0], 0, v.duration || Infinity);
+          v.playbackRate = clamp(arg[1], 0.25, 5);
+          v.play();
           break;
         case 'seekBy':
           v.currentTime = clamp(v.currentTime + arg, 0, v.duration || Infinity);
@@ -387,31 +491,6 @@ const Navegosa = {
     })()`;
   },
 
-  // Callers must prefilter tabs by URL (getMediaTabs) and timeout-guard
-  // the call: a discarded tab hangs tab.execute forever.
-  mediaCommand(browserName, windowIndex, tabIndex, cmd, arg) {
-    const browser = Application(browserName);
-    const wins = browser.windows();
-    if (wins.length < windowIndex) return {error: "Window index out of range"};
-    const win = wins[windowIndex - 1];
-    const tabs = win.tabs();
-    if (tabs.length < tabIndex) return {error: "Tab index out of range"};
-    const tab = tabs[tabIndex - 1];
-    const resultStr = tab.execute({javascript: this._mediaJS(cmd, arg)});
-    if (!resultStr) return {error: "No result from tab"};
-    const state = JSON.parse(resultStr);
-    if (state.error) return state;
-    state.url = tab.url();
-    state.title = tab.name();
-    state.windowIndex = windowIndex;
-    state.tabIndex = tabIndex;
-    return state;
-  },
-
-  mediaStatus(browserName, windowIndex, tabIndex) {
-    return this.mediaCommand(browserName, windowIndex, tabIndex, "status", null);
-  },
-
   // Player fullscreen needs transient user activation, which JS run
   // from Apple Events never has.  A key posted to the browser process
   // is real input to its front tab even while the browser stays in the
@@ -422,11 +501,13 @@ const Navegosa = {
   // permission for osascript.  Entering fullscreen activates the
   // browser twice (on the request and when the animation ends), so the
   // caller runs reclaimFocus alongside.
-  mediaFullscreenToggle(browserName, windowIndex, tabIndex) {
-    const shown = this.showTab(browserName, windowIndex, tabIndex);
+  mediaFullscreenToggle(browserName, tabId) {
+    const found = this._tabById(browserName, tabId);
+    if (!found) return {error: "The media tab is gone"};
+    const shown = this.showTab(browserName, found.windowIndex, found.tabIndex);
     if (shown.error) return shown;
     const browser = Application(browserName);
-    const tab = browser.windows()[windowIndex - 1].tabs()[tabIndex - 1];
+    const tab = found.tab;
     const inFullscreen = () => tab.execute({javascript: "!!document.fullscreenElement"});
     if (!inFullscreen()) {
       ObjC.import("AppKit");
@@ -441,7 +522,7 @@ const Navegosa = {
              Date.now() < activationDeadline)
         this._spin(0.0125);
     }
-    const state = this.mediaCommand(browserName, windowIndex, tabIndex, "fullscreenToggle", null);
+    const state = this._runOn(browser, found, "fullscreenToggle", null);
     if (state.error) return state;
     const deadline = Date.now() + 1000;
     while (inFullscreen() !== state.fullscreen && Date.now() < deadline) this._spin(0.025);
@@ -461,8 +542,10 @@ const Navegosa = {
     const win = wins[0];
     const tab = new (browser.Tab)({url: url});
     win.tabs.push(tab);
-    const tabIndex = win.tabs().length;
+    const ids = win.tabs.id();
+    const tabIndex = ids.length;
     return {
+      id: ids[tabIndex - 1],
       windowIndex: 1,
       tabIndex: tabIndex,
       url: url,

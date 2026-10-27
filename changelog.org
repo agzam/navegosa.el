@@ -1,6 +1,14 @@
 #+title: Changelog
 
 * Unreleased
+- Media commands act on the tab that plays.  Each command is one JXA call (JS =mediaRun=) that lists the media tabs, checks which play, and picks the target: the tab picked with ~navegosa-media-select-tab~, else a playing one (the last controlled first), else the last controlled, else the shown one.  Before, a cached window and tab index could point at another tab once tabs moved, so play/pause resumed a random video.
+- Tabs are tracked by the browser's tab id (=showTabById=, =mediaFullscreenToggle= by id); =mediaCommand= and =mediaStatus= are gone.
+- ~navegosa-media-play-pause~ never leaves two videos playing: it pauses every other playing tab first.  ~navegosa-media-open-url~ pauses playing tabs before it opens the new one and picks it.
+- ~navegosa-media-select-tab~ marks playing tabs with ♫ (players on the MPRIS lane too), and the pick holds until ~navegosa-media-clear-pick~.
+- Add ~navegosa-media-pause~; with a handler it hands over the paused tab's URL, time and rate, so playback can continue elsewhere.  The MPRIS lane gains =pause=.
+- Add ~navegosa-media-play-url-at~, the way back: it plays a URL from a time at a rate in the media tab that shows the same video (YouTube matches by video id), or in a new tab opened at that time.  It retries while the tab loads, and other playing tabs pause.  The MPRIS lane opens the timestamped URL.
+- An unloaded (Memory Saver) tab no longer stalls every command: the script names each tab before checking it, and a tab silent for ~navegosa-media-check-timeout~ is skipped for a minute while the command runs again.
+- =make test= also runs =node --test test/= against a fake browser, and the batch Emacs runs in a sandboxed =--init-directory=.
 - Media commands keep keyboard focus in Emacs: ~navegosa-media-select-tab~ and ~navegosa-media-open-tab~ show the tab in its window without activating the browser (JS =showTab=; =activateTab= still activates, for the general tab switchers).
 - ~navegosa-media-fullscreen-toggle~ toggles the player's own fullscreen instead of macOS window fullscreen: a key posted to the browser process (=CGEventPostToPid=, F19) gives the page the user gesture the Fullscreen API demands without activating the browser, then YouTube's fullscreen button (else the video element) takes over.  Exiting calls =document.exitFullscreen()=, which needs no gesture.
 - Entering fullscreen still activates the browser, twice: ~navegosa--reclaim-focus~ starts a JXA watcher that re-activates Emacs every time the browser comes to the front, for ~navegosa-reclaim-focus-wait~ seconds.

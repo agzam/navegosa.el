@@ -20,9 +20,10 @@
 ;; (navegosa-mpris.el), a narrower surface where some commands
 ;; degrade with an honest error.
 ;;
-;; Tabs are discovered by URL prefilter only and every JXA call is
-;; deadline-guarded, because executing JS into a discarded (Memory
-;; Saver) tab hangs osascript indefinitely.
+;; Each command is one JXA call that lists the media tabs, checks which
+;; of them play, picks the target by tab id and runs the command.  An
+;; unloaded (Memory Saver) tab never answers the check, so every call is
+;; deadline-guarded and a silent tab is left out for a while.
 
 ;;; Code:
 
@@ -71,20 +72,35 @@ Guards against probing a tab that cannot respond; a healthy
 round-trip is ~150ms."
   :type 'number)
 
+(defcustom navegosa-media-check-timeout 0.75
+  "Seconds a tab may take to tell whether it plays.
+A tab silent for longer counts as unloaded and stays out of the check
+for a minute; a healthy check takes a few milliseconds."
+  :type 'number)
+
 ;;;; State
 
 (defvar navegosa-media--tab nil
-  "Cached media tab plist (:windowIndex :tabIndex :url :title).")
+  "The tab the last command acted on: plist with :id, :url and :title.")
+
+(defvar navegosa-media--pick nil
+  "Id of the tab picked with `navegosa-media-select-tab'.
+A pick wins over playing tabs until `navegosa-media-clear-pick'.")
+
+(defvar navegosa-media--skip nil
+  "Alist of (TAB-ID . TIME): tabs that missed the playing check.")
 
 ;;;; Guarded runner
 
-(defun navegosa-media--call-async (fn args callback)
+(defun navegosa-media--call-async (fn args callback &optional on-line)
   "Call Navegosa.FN with ARGS list via JXA; CALLBACK receives (RESULT ERR).
-The osascript process is killed after `navegosa-media-timeout'
-seconds, in which case ERR describes the timeout.  Returns the
-process object."
+ON-LINE, when non-nil, receives each line as the script prints it;
+the result is the last line.  The osascript process is killed after
+`navegosa-media-timeout' seconds, in which case ERR describes the
+timeout.  Returns the process object."
   (navegosa--ensure-macos)
   (let* ((buf (generate-new-buffer " *navegosa-media*" t))
+         (partial "")
          (timer nil)
          (proc
           (make-process
@@ -93,15 +109,28 @@ process object."
            :command '("osascript" "-l" "JavaScript")
            :connection-type 'pipe
            :noquery t
+           :filter
+           (lambda (_p chunk)
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (goto-char (point-max))
+                 (insert chunk)))
+             (when on-line
+               (let ((lines (split-string (concat partial chunk) "\n")))
+                 (setq partial (car (last lines)))
+                 (mapc on-line (butlast lines)))))
            :sentinel
            (lambda (p _event)
              (unless (process-live-p p)
                (when timer (cancel-timer timer))
-               (let ((output (when (buffer-live-p buf)
-                               (with-current-buffer buf
-                                 (string-trim (buffer-string)))))
-                     (killed (eq (process-status p) 'signal))
-                     (code (process-exit-status p)))
+               (let* ((output (when (buffer-live-p buf)
+                                (with-current-buffer buf
+                                  (string-trim (buffer-string)))))
+                      (killed (eq (process-status p) 'signal))
+                      (code (process-exit-status p))
+                      (result (if (zerop code)
+                                  (car (last (split-string (or output "") "\n" t)))
+                                output)))
                  (when (buffer-live-p buf) (kill-buffer buf))
                  (if killed
                      (funcall callback nil
@@ -109,7 +138,7 @@ process object."
                                       navegosa-media-timeout))
                    (condition-case e
                        (funcall callback
-                                (navegosa--parse-result (or output "") code)
+                                (navegosa--parse-result (or result "") code)
                                 nil)
                      (error (funcall callback nil (error-message-string e)))))))))))
     (setq timer (run-at-time navegosa-media-timeout nil
@@ -136,49 +165,93 @@ Same deadline guard as `navegosa-media--call-async'; signals
      ((not done) (user-error "navegosa-media: no response from JXA"))
      (t result))))
 
-;;;; Tab discovery
+;;;; Target choice
 
 (defun navegosa-media--url-pattern ()
   "Join `navegosa-media-url-patterns' into one JS regex string."
   (mapconcat #'identity navegosa-media-url-patterns "|"))
 
-(defun navegosa-media--candidates ()
-  "Return media-tab candidates, URL-prefiltered, never JS-probed."
-  (navegosa--run "getMediaTabs" (navegosa--browser)
-                 (navegosa-media--url-pattern)))
+(defun navegosa-media--skip-ids ()
+  "Comma-joined ids of tabs that missed the playing check in the last minute."
+  (setq navegosa-media--skip
+        (seq-filter (lambda (entry) (< (- (float-time) (cdr entry)) 60))
+                    navegosa-media--skip))
+  (mapconcat #'car navegosa-media--skip ","))
+
+(defun navegosa-media--run (cmd arg callback &optional retried)
+  "Run media CMD with ARG in one `mediaRun' call; CALLBACK gets (RESULT ERR).
+The script names each tab before checking it.  A tab silent past
+`navegosa-media-check-timeout' is skipped for a minute, and the call
+runs once more without it unless RETRIED."
+  (let (proc watchdog stalled)
+    (setq proc
+          (navegosa-media--call-async
+           "mediaRun"
+           (list (navegosa--browser) (navegosa-media--url-pattern)
+                 navegosa-media--pick (plist-get navegosa-media--tab :id)
+                 (navegosa-media--skip-ids) cmd arg)
+           (lambda (result err)
+             (when watchdog (cancel-timer watchdog))
+             (unless stalled (funcall callback result err)))
+           (lambda (line)
+             (when watchdog (cancel-timer watchdog) (setq watchdog nil))
+             (when (string-prefix-p "probe " line)
+               (let ((id (substring line 6)))
+                 (setq watchdog
+                       (run-at-time
+                        navegosa-media-check-timeout nil
+                        (lambda ()
+                          (setq stalled t)
+                          (setf (alist-get id navegosa-media--skip nil nil #'equal)
+                                (float-time))
+                          (when (process-live-p proc) (kill-process proc))
+                          (if retried
+                              (funcall callback nil (format "tab %s does not answer" id))
+                            (navegosa-media--run cmd arg callback t))))))))))
+    proc))
+
+(defun navegosa-media--run-sync (cmd arg)
+  "Run media CMD with ARG, wait, and return the result plist.
+Signals `user-error' on failure or timeout."
+  (let ((done nil) (result nil) (err nil))
+    (navegosa-media--run cmd arg (lambda (r e) (setq done t result r err e)))
+    (let ((deadline (+ (float-time) (* 2 navegosa-media-timeout) 1.0)))
+      (while (and (not done) (< (float-time) deadline))
+        (accept-process-output nil 0.05)))
+    (cond
+     (err (user-error "navegosa-media: %s" err))
+     ((not done) (user-error "navegosa-media: no response from JXA"))
+     (t result))))
 
 (defun navegosa-media--candidate-label (tab)
-  "Completion label for TAB."
-  (format "%s | %s" (plist-get tab :title) (plist-get tab :url)))
+  "Completion label for TAB; a playing tab starts with ♫."
+  (format "%s%s | %s"
+          (if (plist-get tab :playing) "♫ " "")
+          (plist-get tab :title) (plist-get tab :url)))
 
-(defun navegosa-media--locate (&optional mode)
-  "Locate a media tab, cache and return it.
-MODE nil prompts via `completing-read' only when there are several
-candidates; `auto' never prompts and takes the first (the retry
-path runs from a process sentinel, where prompting would be
-hostile); `prompt' always prompts, a single candidate shows as the
-one choice.  Signals `user-error' when nothing matches
-`navegosa-media-url-patterns'."
-  (let ((cands (navegosa-media--candidates)))
+(defun navegosa-media--prompt-tab (tabs)
+  "Offer TABS in the minibuffer and return the chosen one."
+  (let ((alist (mapcar (lambda (tab) (cons (navegosa-media--candidate-label tab) tab))
+                       tabs)))
+    (cdr (assoc (completing-read "Media tab: " (mapcar #'car alist) nil t)
+                alist))))
+
+(defun navegosa-media--remember (state)
+  "Make the tab STATE came from the last controlled one."
+  (when-let* ((id (plist-get state :id)))
     (setq navegosa-media--tab
-          (cond
-           ((null cands)
-            (user-error "navegosa-media: no media tabs open"))
-           ((or (eq mode 'auto)
-                (and (null (cdr cands)) (not (eq mode 'prompt))))
-            (car cands))
-           (t
-            (let* ((alist (mapcar (lambda (tab)
-                                    (cons (navegosa-media--candidate-label tab)
-                                          tab))
-                                  cands))
-                   (choice (completing-read "Media tab: " (mapcar #'car alist)
-                                            nil t)))
-              (cdr (assoc choice alist))))))))
+          (list :id id :url (plist-get state :url) :title (plist-get state :title)))))
 
-(defun navegosa-media--ensure-tab ()
-  "Return the cached media tab, locating one first when needed."
-  (or navegosa-media--tab (navegosa-media--locate)))
+(defun navegosa-media--settle-target ()
+  "Settle the target tab now, prompting when nothing decides; return it.
+The browser side takes the picked, a playing, the last, the shown or
+the only tab.  The prompt runs here, in a command, because a process
+sentinel cannot safely read the minibuffer."
+  (let ((result (navegosa-media--run-sync "pick" nil)))
+    (navegosa-media--remember
+     (or (plist-get result :target)
+         (navegosa-media--prompt-tab (plist-get result :tabs))))
+    navegosa-media--tab))
 
 ;;;; State formatting
 
@@ -224,52 +297,51 @@ A live stream's Infinity duration serializes to JSON null."
 
 ;;;; Command dispatch
 
-(defun navegosa-media--dispatch (cmd arg &optional handler no-retry)
-  "Send media CMD with ARG to the cached tab, locating one when needed.
-HANDLER receives the returned state plist (default:
-`navegosa-media--echo').  On failure the tab cache is invalidated
-and the command retried once against a freshly located tab, unless
-NO-RETRY is non-nil.  On Linux the command goes to the MPRIS lane
-instead, synchronously (in-process D-Bus needs no subprocess)."
-  (if (navegosa-media--use-mpris-p)
-      (navegosa-mpris-dispatch cmd arg (or handler #'navegosa-media--echo))
-    (let ((tab (navegosa-media--ensure-tab))
-          (handler (or handler #'navegosa-media--echo)))
-      (navegosa-media--call-async
-       (if (equal cmd "status") "mediaStatus" "mediaCommand")
-       (append (list (navegosa--browser)
-                     (plist-get tab :windowIndex)
-                     (plist-get tab :tabIndex))
-               (unless (equal cmd "status") (list cmd arg)))
-       (lambda (state err)
+(defun navegosa-media--dispatch (cmd arg &optional handler)
+  "Send media CMD with ARG to the target tab; HANDLER gets the state.
+HANDLER defaults to `navegosa-media--echo'.  The target is the picked
+tab, else a playing one, else the last one controlled; before the
+first command it is settled here.  On Linux the command goes to the
+MPRIS lane instead, synchronously (in-process D-Bus)."
+  (let ((handler (or handler #'navegosa-media--echo)))
+    (if (navegosa-media--use-mpris-p)
+        (navegosa-mpris-dispatch cmd arg handler)
+      (unless (or navegosa-media--pick navegosa-media--tab)
+        (navegosa-media--settle-target))
+      (navegosa-media--run
+       cmd arg
+       (lambda (result err)
          (cond
-          ((null err) (funcall handler state))
-          (no-retry (message "navegosa-media: %s" err))
-          (t
+          (err (message "navegosa-media: %s" err))
+          ((plist-get result :tabs)
+           ;; the last tab is gone and nothing else decides
            (setq navegosa-media--tab nil)
-           (condition-case relocate-err
-               (progn
-                 (navegosa-media--locate 'auto)
-                 (navegosa-media--dispatch cmd arg handler 'no-retry))
-             (error (message "%s" (error-message-string relocate-err)))))))))))
+           (message "navegosa-media: no tab plays and the last one is gone; run it again to pick one"))
+          (t (navegosa-media--remember result)
+             (funcall handler result))))))))
 
 ;;;; Commands
 
 ;;;###autoload
 (defun navegosa-media-select-tab ()
-  "Pick the media tab to control and bring it up in the browser.
-Always prompts, a single candidate showing as the one choice.  The
-tab is shown in its window without activating the browser app, so
-Emacs keeps keyboard focus.  On the MPRIS lane this picks among
-active players instead; raising the window is not in the protocol."
+  "Pick the media tab to control and show it in its browser window.
+Playing tabs are marked with ♫.  The pick wins over playing tabs
+until `navegosa-media-clear-pick'.  The browser app is not activated,
+so Emacs keeps keyboard focus.  On the MPRIS lane this picks a player."
   (interactive)
   (if (navegosa-media--use-mpris-p)
       (navegosa-mpris-select-player)
-    (let ((tab (navegosa-media--locate 'prompt)))
-      (navegosa--run "showTab" (navegosa--browser)
-                     (plist-get tab :windowIndex)
-                     (plist-get tab :tabIndex))
+    (let ((tab (navegosa-media--prompt-tab
+                (plist-get (navegosa-media--run-sync "list" nil) :tabs))))
+      (setq navegosa-media--pick (plist-get tab :id))
+      (navegosa-media--remember tab)
+      (navegosa--run "showTabById" (navegosa--browser) (plist-get tab :id))
       (message "navegosa-media: controlling %s" (plist-get tab :title)))))
+
+(defun navegosa-media-clear-pick ()
+  "Forget the tab picked with `navegosa-media-select-tab'.
+Commands go to a playing tab again."
+  (setq navegosa-media--pick nil))
 
 ;;;###autoload
 (defun navegosa-media-status ()
@@ -279,9 +351,18 @@ active players instead; raising the window is not in the protocol."
 
 ;;;###autoload
 (defun navegosa-media-play-pause ()
-  "Toggle play/pause in the controlled media tab."
+  "Toggle play/pause in the target tab; other playing tabs pause first.
+So it either silences every tab or plays the target alone."
   (interactive)
   (navegosa-media--dispatch "playPause" nil))
+
+;;;###autoload
+(defun navegosa-media-pause (&optional handler)
+  "Pause the target tab.
+HANDLER, when given, receives the paused tab's state plist with
+:url, :time and :rate, so playback can continue elsewhere."
+  (interactive)
+  (navegosa-media--dispatch "pause" nil handler))
 
 ;;;###autoload
 (defun navegosa-media-seek-forward (&optional arg)
@@ -378,13 +459,11 @@ alongside and hands keyboard focus back to Emacs each time."
   (when (navegosa-media--use-mpris-p)
     (user-error
      "navegosa-mpris: fullscreen unsupported on this backend (MPRIS has no window surface)"))
-  (let ((tab (navegosa-media--ensure-tab)))
+  (let ((tab (navegosa-media--settle-target)))
     (navegosa--reclaim-focus)
     (navegosa-media--call-async
      "mediaFullscreenToggle"
-     (list (navegosa--browser)
-           (plist-get tab :windowIndex)
-           (plist-get tab :tabIndex))
+     (list (navegosa--browser) (plist-get tab :id))
      (lambda (state err)
        (if err
            (message "navegosa-media: %s" err)
@@ -428,14 +507,15 @@ The browser app is not activated, so Emacs keeps keyboard focus;
 the tab becomes visible wherever its window is on screen, which is
 what a never-shown YouTube tab needs before it loads media."
   (interactive)
-  (let ((tab (navegosa-media--ensure-tab)))
-    (navegosa--run "showTab" (navegosa--browser)
-                   (plist-get tab :windowIndex)
-                   (plist-get tab :tabIndex))))
+  (unless navegosa-media--tab
+    (user-error "navegosa-media: no media tab controlled yet"))
+  (navegosa--run "showTabById" (navegosa--browser)
+                 (plist-get navegosa-media--tab :id)))
 
 ;;;###autoload
 (defun navegosa-media-open-url (url)
   "Open URL as the browser window's front tab and control it.
+Playing tabs pause first, so the new video does not play over them.
 The tab is switched in-window without activating the browser app,
 so Emacs keeps focus; media starts once the browser window is
 visible on screen (the player defers loading in hidden tabs).
@@ -449,11 +529,44 @@ attaches to the newly playing media."
         (browse-url url)
         (setq navegosa-mpris--service nil)
         (message "navegosa-media: opened in browser; control attaches once it plays"))
+    (navegosa-media--run "pauseAll" nil #'ignore)
     (let ((tab (navegosa-media--call-sync "openMediaTab"
                                           (navegosa--browser) url)))
-      (setq navegosa-media--tab tab)
+      (setq navegosa-media--pick (plist-get tab :id))
+      (navegosa-media--remember tab)
       (message "navegosa-media: opened %s" (plist-get tab :url))
       tab)))
+
+(defun navegosa-media--play-at (time rate tries)
+  "Play the picked tab from TIME seconds at RATE.
+A tab that is still loading has no video yet, so a failed try runs
+again half a second later, TRIES times in all."
+  (navegosa-media--run
+   "playAt" (vector time rate)
+   (lambda (result err)
+     (cond
+      ((and err (< 1 tries))
+       (run-at-time 0.5 nil #'navegosa-media--play-at time rate (1- tries)))
+      (err (message "navegosa-media: %s" err))
+      (t (navegosa-media--remember result)
+         (navegosa-media--echo result))))))
+
+;;;###autoload
+(defun navegosa-media-play-url-at (url time &optional rate)
+  "Play URL in the browser from TIME seconds at RATE.
+A media tab showing the same video plays it, else URL opens in a new
+tab; other playing tabs pause.  On the MPRIS lane URL opens through
+`browse-url' at TIME, and RATE is not applied."
+  (if (navegosa-media--use-mpris-p)
+      (navegosa-media-open-url (navegosa-media--timestamped-url url time))
+    (if-let* ((tab (navegosa-media--call-sync "findMediaTab" (navegosa--browser)
+                                              (navegosa-media--url-pattern) url)))
+        (progn
+          (setq navegosa-media--pick (plist-get tab :id))
+          (navegosa-media--remember tab)
+          (navegosa--run "showTabById" (navegosa--browser) (plist-get tab :id)))
+      (navegosa-media-open-url (navegosa-media--timestamped-url url time)))
+    (navegosa-media--play-at time (or rate 1) 20)))
 
 (provide 'navegosa-media)
 ;;; navegosa-media.el ends here

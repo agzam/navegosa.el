@@ -112,12 +112,13 @@ add \"navegosa-scripts.js\" to its :files recipe"
               (buffer-string)))))
 
 (defun navegosa--to-js (value)
-  "Serialize elisp VALUE to a JavaScript literal."
+  "Serialize elisp VALUE to a JavaScript literal; a vector becomes an array."
   (cond
    ((stringp value) (json-encode-string value))
    ((numberp value) (number-to-string value))
    ((eq value t) "true")
    ((null value) "null")
+   ((vectorp value) (concat "[" (mapconcat #'navegosa--to-js value ", ") "]"))
    (t (error "Cannot serialize %S to JavaScript" value))))
 
 (defun navegosa--build-script (fn args)

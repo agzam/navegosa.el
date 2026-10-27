@@ -95,7 +95,8 @@ Events (see below). Works on background tabs - no focus stealing.
 
 | Command                          | Description                                |
 |----------------------------------+--------------------------------------------|
-| ~navegosa-media-play-pause~        | Toggle play/pause                          |
+| ~navegosa-media-play-pause~        | Toggle play/pause; other tabs pause first  |
+| ~navegosa-media-pause~             | Pause (a handler gets URL, time and rate)  |
 | ~navegosa-media-seek-forward~      | Seek forward (prefix arg multiplies)       |
 | ~navegosa-media-seek-backward~     | Seek backward (prefix arg multiplies)      |
 | ~navegosa-media-seek-to~           | Seek to absolute position (seconds)        |
@@ -112,25 +113,37 @@ Events (see below). Works on background tabs - no focus stealing.
 | ~navegosa-media-fullscreen-toggle~ | Toggle the player's fullscreen             |
 | ~navegosa-media-copy-url~          | Copy URL timestamped at current position   |
 | ~navegosa-media-status~            | Echo position/rate/volume/title            |
-| ~navegosa-media-select-tab~        | Pick a media tab (always prompts), show it |
+| ~navegosa-media-select-tab~        | Pick a media tab (♫ marks playing ones)    |
+| ~navegosa-media-clear-pick~        | Forget the pick; playing tabs lead again   |
 | ~navegosa-media-open-tab~          | Show the controlled tab in its window      |
-| ~navegosa-media-open-url~          | Open a URL as front tab and control it     |
+| ~navegosa-media-open-url~          | Pause playing tabs, open a URL, control it |
 
 Every command echoes the resulting state, e.g. =12:34/56:07 1.5x
 vol:80% Title=.
 
-The controlled tab is found by URL (never by probing tabs with JS - a
-tab discarded by Memory Saver would hang the call) and cached.  When a
-command fails, the cache is invalidated and the command retried once
-against a freshly located tab.  Every call is deadline-guarded.
+To hand playback to another player and back, ~navegosa-media-pause~ with a handler gives the tab's URL, time and rate, and the function ~navegosa-media-play-url-at~ plays a URL from a time at a rate: in the tab that shows the same video, else in a new tab.
 
-| Customization               | Default             | Description                     |
-|-----------------------------+---------------------+---------------------------------|
-| ~navegosa-media-url-patterns~ | youtube, vimeo, ... | JS regexes for media tab URLs   |
-| ~navegosa-media-seek-step~    | ~5~                   | Seconds per seek                |
-| ~navegosa-media-speed-step~   | ~1.1~                 | Rate multiplier per step        |
-| ~navegosa-media-volume-step~  | ~0.1~                 | Volume step (0.0-1.0)           |
-| ~navegosa-media-timeout~      | ~3.0~                 | Kill JXA call after this many s |
+Each command is one JXA call: it lists the media tabs by URL, checks
+which of them play, picks the target and runs the command.  The
+target is the picked tab, else a playing one (the last controlled
+first), else the last controlled, else the shown one; tabs are tracked
+by the browser's tab id, so opening, closing or moving tabs never
+redirects a command.  Play/pause never leaves two videos playing: it
+pauses every other playing tab, then toggles the target.
+
+A tab unloaded by Memory Saver never answers the playing check.  The
+script names each tab before it checks it; a tab silent for
+~navegosa-media-check-timeout~ seconds is left out for a minute and the
+command runs again without it.  Every call is deadline-guarded.
+
+| Customization                | Default             | Description                                     |
+|------------------------------+---------------------+-------------------------------------------------|
+| ~navegosa-media-url-patterns~  | youtube, vimeo, ... | JS regexes for media tab URLs                   |
+| ~navegosa-media-seek-step~     | ~5~                   | Seconds per seek                                |
+| ~navegosa-media-speed-step~    | ~1.1~                 | Rate multiplier per step                        |
+| ~navegosa-media-volume-step~   | ~0.1~                 | Volume step (0.0-1.0)                           |
+| ~navegosa-media-timeout~       | ~3.0~                 | Kill JXA call after this many s                 |
+| ~navegosa-media-check-timeout~ | ~0.75~                | Seconds a tab may take to tell whether it plays |
 
 Note: a YouTube tab that has never been focused does not load its video (the player defers loading until the tab is visible).  Commands report it distinctly; use ~navegosa-media-open-tab~ once to start it.  It shows the tab without activating the browser, so the browser window must be visible on screen.
 
