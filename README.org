@@ -123,13 +123,9 @@ vol:80% Title=.
 
 To hand playback to another player and back, ~navegosa-media-pause~ with a handler gives the tab's URL, time and rate, and the function ~navegosa-media-play-url-at~ plays a URL from a time at a rate: in the tab that shows the same video, else in a new tab.
 
-Each command is one JXA call: it lists the media tabs by URL, checks
-which of them play, picks the target and runs the command.  The
-target is the picked tab, else a playing one (the last controlled
-first), else the last controlled, else the shown one; tabs are tracked
-by the browser's tab id, so opening, closing or moving tabs never
-redirects a command.  Play/pause never leaves two videos playing: it
-pauses every other playing tab, then toggles the target.
+Each command is one JXA call: it lists the media tabs by URL, adds each window's shown tab and the last controlled one when they hold a player, checks which of them play, picks the target and runs the command.  The target is the picked tab, else a playing one (the last controlled first), else the shown one, else the last controlled; tabs are tracked by the browser's tab id, so opening, closing or moving tabs never redirects a command.  Play/pause never leaves two videos playing: it pauses every other playing tab, then toggles the target.
+
+Off the URL patterns, a page holds a player when it has a YouTube embed, a video with controls, or a video playing with sound; a muted looping clip, which many sites use for GIFs, does not count.  Within a page, a player with sound beats a muted one, and the one on screen beats a larger one off screen.
 
 A tab unloaded by Memory Saver never answers the playing check.  The
 script names each tab before it checks it; a tab silent for
@@ -138,7 +134,7 @@ command runs again without it.  Every call is deadline-guarded.
 
 | Customization                | Default             | Description                                     |
 |------------------------------+---------------------+-------------------------------------------------|
-| ~navegosa-media-url-patterns~  | youtube, vimeo, ... | JS regexes for media tab URLs                   |
+| ~navegosa-media-url-patterns~  | youtube, vimeo, ... | JS regexes for media tab URLs (shown tabs join) |
 | ~navegosa-media-seek-step~     | ~5~                   | Seconds per seek                                |
 | ~navegosa-media-speed-step~    | ~1.1~                 | Rate multiplier per step                        |
 | ~navegosa-media-volume-step~   | ~0.1~                 | Volume step (0.0-1.0)                           |
@@ -146,6 +142,8 @@ command runs again without it.  Every call is deadline-guarded.
 | ~navegosa-media-check-timeout~ | ~0.75~                | Seconds a tab may take to tell whether it plays |
 
 Note: a YouTube tab that has never been focused does not load its video (the player defers loading until the tab is visible).  Commands report it distinctly; use ~navegosa-media-open-tab~ once to start it.  It shows the tab without activating the browser, so the browser window must be visible on screen.
+
+Embedded YouTube players (an article with a video in it) work through YouTube's IFrame API.  The player sits in an iframe from another site, out of reach of the page's script, and it takes commands only when its URL carries =enablejsapi=1=, which most sites leave out.  The first command on such an embed adds the parameter, and that reloads the embed: a video started by clicking in the page starts over, and the echo says =(reloaded the embed to control it)=.  The echo shows the video's own title, and ~navegosa-media-copy-url~ and the pause hand-off get its watch URL.  Speed steps through the rates YouTube offers, subtitles switch between a track the embed lists and none, theater mode does not exist there, and fullscreen fills the screen with the embed.
 
 Fullscreen note: ~navegosa-media-fullscreen-toggle~ toggles the player's own fullscreen (YouTube's fullscreen button, else the video element).  The Fullscreen API needs a user gesture, which JavaScript from Apple Events never carries, so the command first posts a key (F19) to the browser process; the page takes it as real input while the browser stays in the background.  Posting keys requires Accessibility permission for =osascript= (System Settings -> Privacy & Security -> Accessibility); without it the command reports that the page got no key event.  Entering fullscreen activates the browser twice; the command hands keyboard focus straight back to Emacs each time (it watches for ~navegosa-reclaim-focus-wait~ seconds).
 

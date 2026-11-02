@@ -50,8 +50,8 @@
 (defcustom navegosa-media-url-patterns
   '("youtube\\.com/watch" "youtu\\.be/" "vimeo\\.com" "twitch\\.tv")
   "JavaScript regexes matching URLs of tabs that may contain media.
-Only matching tabs are ever probed: JS execution into a discarded
-tab hangs forever, and playing tabs always match by URL."
+A tab that matches none is checked only while it is shown, picked or
+last controlled: JS execution into a discarded tab hangs forever."
   :type '(repeat string))
 
 (defcustom navegosa-media-seek-step 5
@@ -244,7 +244,7 @@ Signals `user-error' on failure or timeout."
 
 (defun navegosa-media--settle-target ()
   "Settle the target tab now, prompting when nothing decides; return it.
-The browser side takes the picked, a playing, the last, the shown or
+The browser side takes the picked, a playing, the shown, the last or
 the only tab.  The prompt runs here, in a command, because a process
 sentinel cannot safely read the minibuffer."
   (let ((result (navegosa-media--run-sync "pick" nil)))
@@ -300,9 +300,9 @@ A live stream's Infinity duration serializes to JSON null."
 (defun navegosa-media--dispatch (cmd arg &optional handler)
   "Send media CMD with ARG to the target tab; HANDLER gets the state.
 HANDLER defaults to `navegosa-media--echo'.  The target is the picked
-tab, else a playing one, else the last one controlled; before the
-first command it is settled here.  On Linux the command goes to the
-MPRIS lane instead, synchronously (in-process D-Bus)."
+tab, else a playing one, else a shown one, else the last one
+controlled; before the first command it is settled here.  On Linux the
+command goes to the MPRIS lane instead, synchronously (in-process D-Bus)."
   (let ((handler (or handler #'navegosa-media--echo)))
     (if (navegosa-media--use-mpris-p)
         (navegosa-mpris-dispatch cmd arg handler)

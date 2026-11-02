@@ -1,7 +1,10 @@
 #+title: Changelog
 
 * Unreleased
-- Media commands act on the tab that plays.  Each command is one JXA call (JS =mediaRun=) that lists the media tabs, checks which play, and picks the target: the tab picked with ~navegosa-media-select-tab~, else a playing one (the last controlled first), else the last controlled, else the shown one.  Before, a cached window and tab index could point at another tab once tabs moved, so play/pause resumed a random video.
+- Media commands act on the tab that plays.  Each command is one JXA call (JS =mediaRun=) that lists the media tabs, checks which play, and picks the target: the tab picked with ~navegosa-media-select-tab~, else a playing one (the last controlled first), else the shown one, else the last controlled.  Before, a cached window and tab index could point at another tab once tabs moved, so play/pause resumed a random video.
+- Media commands reach players outside ~navegosa-media-url-patterns~: each window's shown tab and the last controlled one join the candidates while they hold a player (a YouTube embed, a video with controls, or one playing with sound).  There, a muted looping clip is no player and never counts as playing.
+- Embedded YouTube players are driven through YouTube's IFrame API.  The first command on an embed without =enablejsapi=1= adds the parameter, which reloads the embed, and waits for its answer.  The state carries the video's own title and watch URL, so copy-url and the pause hand-off work; speed steps through YouTube's rates, and fullscreen fills the screen with the embed.
+- Within a page, a player with sound beats a muted one, and the one on screen beats a larger one off screen.
 - Tabs are tracked by the browser's tab id (=showTabById=, =mediaFullscreenToggle= by id); =mediaCommand= and =mediaStatus= are gone.
 - ~navegosa-media-play-pause~ never leaves two videos playing: it pauses every other playing tab first.  ~navegosa-media-open-url~ pauses playing tabs before it opens the new one and picks it.
 - ~navegosa-media-select-tab~ marks playing tabs with ♫ (players on the MPRIS lane too), and the pick holds until ~navegosa-media-clear-pick~.

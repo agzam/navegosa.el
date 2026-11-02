@@ -1026,7 +1026,7 @@ Reads the file itself: other suites stub the scripts cache."
   (it "toggles the player's own fullscreen in the page"
     ;; Exiting needs no gesture; entering refuses without one instead
     ;; of failing silently, and prefers YouTube's own button.
-    (let ((src (navegosa-tests--js-method "_mediaJS")))
+    (let ((src (navegosa-tests--js-method "_pageJS")))
       (expect src :to-match "case 'fullscreenToggle'")
       (expect src :to-match "document\\.exitFullscreen()")
       (expect src :to-match "\\.ytp-fullscreen-button")
