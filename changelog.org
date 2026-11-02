@@ -5,6 +5,7 @@
 - Media commands reach players outside ~navegosa-media-url-patterns~: each window's shown tab and the last controlled one join the candidates while they hold a player (a YouTube embed, a video with controls, or one playing with sound).  There, a muted looping clip is no player and never counts as playing.
 - Embedded YouTube players are driven through YouTube's IFrame API.  The first command on an embed without =enablejsapi=1= adds the parameter, which reloads the embed, and waits for its answer.  The state carries the video's own title and watch URL, so copy-url and the pause hand-off work; speed steps through YouTube's rates, and fullscreen fills the screen with the embed.
 - Within a page, a player with sound beats a muted one, and the one on screen beats a larger one off screen.
+- ~navegosa-media-play-url-at~ sends an embedded video back to the page it played in, while that tab still shows the page, and plays that embed, brought into view.  Before, the way back opened the video in a new YouTube tab.
 - Tabs are tracked by the browser's tab id (=showTabById=, =mediaFullscreenToggle= by id); =mediaCommand= and =mediaStatus= are gone.
 - ~navegosa-media-play-pause~ never leaves two videos playing: it pauses every other playing tab first.  ~navegosa-media-open-url~ pauses playing tabs before it opens the new one and picks it.
 - ~navegosa-media-select-tab~ marks playing tabs with ♫ (players on the MPRIS lane too), and the pick holds until ~navegosa-media-clear-pick~.

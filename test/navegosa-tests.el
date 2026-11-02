@@ -656,6 +656,22 @@
     (expect (plist-get (navegosa-media--settle-target) :id) :to-equal "2")
     (expect (plist-get navegosa-media--tab :id) :to-equal "2")))
 
+(describe "navegosa-media--remember"
+  (before-each (setq navegosa-media--homes nil))
+  (after-each (setq navegosa-media--tab nil navegosa-media--homes nil))
+
+  (it "records the page an embedded video plays in as its home"
+    (navegosa-media--remember '(:id "9" :url "https://www.youtube.com/watch?v=x"
+                                :page "https://blog.example/post" :title "Vid"))
+    (expect (plist-get navegosa-media--tab :id) :to-equal "9")
+    (expect (alist-get "https://www.youtube.com/watch?v=x" navegosa-media--homes nil nil #'equal)
+            :to-equal '(:id "9" :page "https://blog.example/post")))
+
+  (it "records no home for a page's own video"
+    (navegosa-media--remember '(:id "7" :url "https://www.youtube.com/watch?v=y"
+                                :page "https://www.youtube.com/watch?v=y" :title "Y"))
+    (expect navegosa-media--homes :to-be nil)))
+
 (describe "navegosa-media--run"
   :var (saved-scripts)
   (before-each
@@ -1090,18 +1106,35 @@ Reads the file itself: other suites stub the scripts cache."
   (after-each (setq navegosa-media--tab nil navegosa-media--pick nil))
 
   (it "plays the video in the tab that already shows it"
-    (let ((navegosa-media-url-patterns '("youtube" "youtu\\.be")))
+    (let ((navegosa-media-url-patterns '("youtube" "youtu\\.be"))
+          (navegosa-media--homes nil))
       (spy-on 'navegosa-media--call-sync
               :and-return-value '(:id "7" :url "https://www.youtube.com/watch?v=x"
                                   :title "Vid"))
       (navegosa-media-play-url-at "https://youtu.be/x" 754.3 1.5)
       (expect 'navegosa-media--call-sync :to-have-been-called-with
-              "findMediaTab" "Safari" "youtube|youtu\\.be" "https://youtu.be/x")
+              "findMediaTab" "Safari" "youtube|youtu\\.be" "https://youtu.be/x" nil nil)
       (expect navegosa-media--pick :to-equal "7")
       (expect (plist-get navegosa-media--tab :id) :to-equal "7")
       (expect 'navegosa--run :to-have-been-called-with "showTabById" "Safari" "7")
       (expect 'navegosa-media-open-url :not :to-have-been-called)
-      (expect 'navegosa-media--play-at :to-have-been-called-with 754.3 1.5 20)))
+      (expect 'navegosa-media--play-at :to-have-been-called-with
+              754.3 1.5 20 "https://youtu.be/x")))
+
+  (it "sends an embedded video back to the page it came from"
+    (let ((navegosa-media-url-patterns '("youtube"))
+          (navegosa-media--homes
+           '(("https://www.youtube.com/watch?v=x" :id "9" :page "https://blog.example/post"))))
+      (spy-on 'navegosa-media--call-sync
+              :and-return-value '(:id "9" :url "https://blog.example/post" :title "Post"))
+      (navegosa-media-play-url-at "https://www.youtube.com/watch?v=x" 120 1.25)
+      (expect 'navegosa-media--call-sync :to-have-been-called-with
+              "findMediaTab" "Safari" "youtube" "https://www.youtube.com/watch?v=x"
+              "9" "https://blog.example/post")
+      (expect navegosa-media--pick :to-equal "9")
+      (expect 'navegosa-media-open-url :not :to-have-been-called)
+      (expect 'navegosa-media--play-at :to-have-been-called-with
+              120 1.25 20 "https://www.youtube.com/watch?v=x")))
 
   (it "opens the video at the position when no tab shows it"
     (spy-on 'navegosa-media--call-sync :and-return-value nil)
@@ -1109,7 +1142,8 @@ Reads the file itself: other suites stub the scripts cache."
     (expect 'navegosa-media-open-url :to-have-been-called-with
             "https://www.youtube.com/watch?v=x&t=754s")
     (expect 'navegosa--run :not :to-have-been-called)
-    (expect 'navegosa-media--play-at :to-have-been-called-with 754.3 1 20))
+    (expect 'navegosa-media--play-at :to-have-been-called-with
+            754.3 1 20 "https://www.youtube.com/watch?v=x&t=10s"))
 
   (it "opens the timestamped url on the MPRIS lane"
     (spy-on 'navegosa-media--use-mpris-p :and-return-value t)
@@ -1136,10 +1170,11 @@ Reads the file itself: other suites stub the scripts cache."
               :and-call-fake
               (lambda (_cmd _arg callback &optional _retried)
                 (apply callback (pop answers))))
-      (navegosa-media--play-at 754.3 1.5 20)
+      (navegosa-media--play-at 754.3 1.5 20 "https://youtu.be/x")
       (expect (spy-calls-count 'navegosa-media--run) :to-be 3)
-      (expect (seq-take (spy-calls-args-for 'navegosa-media--run 0) 2)
-              :to-equal '("playAt" [754.3 1.5]))
+      ;; every try names the video, so a page with several players plays it
+      (expect (seq-take (spy-calls-args-for 'navegosa-media--run 2) 2)
+              :to-equal '("playAt" [754.3 1.5 "https://youtu.be/x"]))
       (expect (plist-get navegosa-media--tab :id) :to-equal "7")
       (expect 'message :to-have-been-called-with "%s" "12:34/15:00 1.5x Vid")))
 

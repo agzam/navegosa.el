@@ -90,6 +90,10 @@ A pick wins over playing tabs until `navegosa-media-clear-pick'.")
 (defvar navegosa-media--skip nil
   "Alist of (TAB-ID . TIME): tabs that missed the playing check.")
 
+(defvar navegosa-media--homes nil
+  "Alist of (MEDIA-URL . (:id TAB-ID :page PAGE-URL)) for embedded media.
+A video handed to another player goes back to the page it came from.")
+
 ;;;; Guarded runner
 
 (defun navegosa-media--call-async (fn args callback &optional on-line)
@@ -237,10 +241,16 @@ Signals `user-error' on failure or timeout."
                 alist))))
 
 (defun navegosa-media--remember (state)
-  "Make the tab STATE came from the last controlled one."
+  "Make the tab STATE came from the last controlled one.
+Media embedded in a page, whose URL differs from the page's, records
+that page as its home."
   (when-let* ((id (plist-get state :id)))
-    (setq navegosa-media--tab
-          (list :id id :url (plist-get state :url) :title (plist-get state :title)))))
+    (let ((url (plist-get state :url))
+          (page (plist-get state :page)))
+      (setq navegosa-media--tab (list :id id :url url :title (plist-get state :title)))
+      (when (and url page (not (equal url page)))
+        (setf (alist-get url navegosa-media--homes nil nil #'equal)
+              (list :id id :page page))))))
 
 (defun navegosa-media--settle-target ()
   "Settle the target tab now, prompting when nothing decides; return it.
@@ -537,16 +547,17 @@ attaches to the newly playing media."
       (message "navegosa-media: opened %s" (plist-get tab :url))
       tab)))
 
-(defun navegosa-media--play-at (time rate tries)
+(defun navegosa-media--play-at (time rate tries &optional url)
   "Play the picked tab from TIME seconds at RATE.
-A tab that is still loading has no video yet, so a failed try runs
-again half a second later, TRIES times in all."
+On a page with several players, the one showing URL plays.  A tab that
+is still loading has no video yet, so a failed try runs again half a
+second later, TRIES times in all."
   (navegosa-media--run
-   "playAt" (vector time rate)
+   "playAt" (vector time rate url)
    (lambda (result err)
      (cond
       ((and err (< 1 tries))
-       (run-at-time 0.5 nil #'navegosa-media--play-at time rate (1- tries)))
+       (run-at-time 0.5 nil #'navegosa-media--play-at time rate (1- tries) url))
       (err (message "navegosa-media: %s" err))
       (t (navegosa-media--remember result)
          (navegosa-media--echo result))))))
@@ -554,19 +565,22 @@ again half a second later, TRIES times in all."
 ;;;###autoload
 (defun navegosa-media-play-url-at (url time &optional rate)
   "Play URL in the browser from TIME seconds at RATE.
-A media tab showing the same video plays it, else URL opens in a new
-tab; other playing tabs pause.  On the MPRIS lane URL opens through
-`browse-url' at TIME, and RATE is not applied."
+The page that embedded the video plays it while its tab still shows
+that page, else a media tab showing the same video, else URL opens in
+a new tab; other playing tabs pause.  On the MPRIS lane URL opens
+through `browse-url' at TIME, and RATE is not applied."
   (if (navegosa-media--use-mpris-p)
       (navegosa-media-open-url (navegosa-media--timestamped-url url time))
-    (if-let* ((tab (navegosa-media--call-sync "findMediaTab" (navegosa--browser)
-                                              (navegosa-media--url-pattern) url)))
-        (progn
-          (setq navegosa-media--pick (plist-get tab :id))
-          (navegosa-media--remember tab)
-          (navegosa--run "showTabById" (navegosa--browser) (plist-get tab :id)))
-      (navegosa-media-open-url (navegosa-media--timestamped-url url time)))
-    (navegosa-media--play-at time (or rate 1) 20)))
+    (let ((home (alist-get url navegosa-media--homes nil nil #'equal)))
+      (if-let* ((tab (navegosa-media--call-sync "findMediaTab" (navegosa--browser)
+                                                (navegosa-media--url-pattern) url
+                                                (plist-get home :id) (plist-get home :page))))
+          (progn
+            (setq navegosa-media--pick (plist-get tab :id))
+            (navegosa-media--remember tab)
+            (navegosa--run "showTabById" (navegosa--browser) (plist-get tab :id)))
+        (navegosa-media-open-url (navegosa-media--timestamped-url url time))))
+    (navegosa-media--play-at time (or rate 1) 20 url)))
 
 (provide 'navegosa-media)
 ;;; navegosa-media.el ends here

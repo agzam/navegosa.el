@@ -331,7 +331,8 @@ const Navegosa = {
     }
     if (state.pending) return {error: "The embedded player did not answer; try again"};
     if (state.error) return state;
-    state.url = state.url || tab.url();
+    state.page = tab.url();
+    state.url = state.url || state.page;
     state.title = state.title || tab.name();
     state.id = c.id;
     return state;
@@ -388,10 +389,15 @@ const Navegosa = {
   },
 
   // The media tab showing url's video, or null.  Found by URL alone, so
-  // an unloaded tab cannot hang the call.
-  findMediaTab(browserName, urlPattern, url) {
+  // an unloaded tab cannot hang the call.  An embedded video goes back to
+  // its home tab while that tab still shows homePage.
+  findMediaTab(browserName, urlPattern, url, homeId, homePage) {
     if (!new RegExp(urlPattern, "i").test(url))
       return {error: "no navegosa-media-url-patterns entry matches " + url};
+    const home = homeId ? this._tabById(browserName, homeId) : null;
+    if (home && home.tab.url().split("#")[0] === homePage.split("#")[0])
+      return {id: homeId, windowIndex: home.windowIndex, tabIndex: home.tabIndex,
+              url: homePage, title: home.tab.name()};
     return this.getMediaTabs(browserName, urlPattern)
       .find((c) => this._sameMedia(c.url, url)) || null;
   },
@@ -573,13 +579,30 @@ const Navegosa = {
         };
       }
 
+      function youtubeId(url) {
+        return (url.match(/(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|embed\/)|youtu\.be\/)([\w-]{11})/) || [])[1];
+      }
+
+      function embedId(f) {
+        return (stateOf(f).info.videoData || {}).video_id || youtubeId(f.src);
+      }
+
+      // playAt continues one video, so on a page with several players the
+      // embed that shows it plays, brought into view
       function run(cmd, arg) {
         var list = players();
         if (!list.length)
           return {error: document.querySelector('video')
             ? 'Video not loaded - activate the tab once to start it'
             : 'No video element in tab'};
-        return list[0].embed ? runEmbed(list[0].el, cmd, arg) : runVideo(list[0].el, cmd, arg);
+        var p = list[0];
+        var id = cmd === 'playAt' && arg[2] && youtubeId(arg[2]);
+        var same = id && list.find(function(q) { return q.embed && embedId(q.el) === id; });
+        if (same) {
+          same.el.scrollIntoView({block: 'nearest'});
+          p = same;
+        }
+        return p.embed ? runEmbed(p.el, cmd, arg) : runVideo(p.el, cmd, arg);
       }
 
       function runVideo(v, cmd, arg) {
@@ -672,7 +695,7 @@ const Navegosa = {
 
       function embedOut(f, fullscreen, warning) {
         var s = stateOf(f), info = s.info, data = info.videoData || {};
-        var id = data.video_id || (f.src.match(/\/embed\/([\w-]{11})/) || [])[1];
+        var id = embedId(f);
         var volume = val(s, 'volume');
         var out = {
           time: timeOf(s),

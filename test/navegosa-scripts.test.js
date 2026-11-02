@@ -34,12 +34,13 @@ function fakeBrowser(windows) {
   });
   const wins = windows.map((w) => ({
     activeTabIndex: () => w.active,
-    tabs: {
+    // JXA's tab list answers bulk getters and indexing alike
+    tabs: Object.assign(w.tabs.map((t) => tabSpec(t)), {
       id: () => w.tabs.map((t) => t.id),
       url: () => w.tabs.map((t) => t.url),
       name: () => w.tabs.map((t) => t.title),
       byId: (id) => tabSpec(w.tabs.find((t) => t.id === id)),
-    },
+    }),
   }));
   const app = {windows: Object.assign(() => wins, wins)};
   return {app, commands};
@@ -223,6 +224,19 @@ test("findMediaTab finds the tab showing the video across windows, else null", (
                      null);
 });
 
+test("findMediaTab sends an embedded video home while its tab still shows the page", () => {
+  const blog = {id: "k", url: "https://blog.example/post#comments", title: "Post"};
+  const {app} = fakeBrowser([{active: 1, tabs: [yt("a"), blog]}]);
+  globalThis.Application = () => app;
+  const url = "https://www.youtube.com/watch?v=n-AfvuV-bYo";
+  const found = Navegosa.findMediaTab("Brave", "youtube", url, "k", "https://blog.example/post");
+  assert.deepStrictEqual([found.id, found.windowIndex, found.tabIndex, found.url],
+                         ["k", 1, 2, "https://blog.example/post"]);
+  blog.url = "https://blog.example/another-post";
+  assert.strictEqual(Navegosa.findMediaTab("Brave", "youtube", url, "k", "https://blog.example/post"),
+                     null);
+});
+
 test("findMediaTab refuses a URL no media pattern matches", () => {
   const {app} = fakeBrowser([{active: 1, tabs: []}]);
   globalThis.Application = () => app;
@@ -250,9 +264,9 @@ test("_runOn waits while an embed reloads and answers, then takes its URL and ti
                                {time: 5, paused: false, url: "https://www.youtube.com/watch?v=n-AfvuV-bYo",
                                 title: "Fast, Async LaTeX Previews in Org Mode"}]);
   const state = withFakeClock(() => Navegosa._runOn(browser, {id: "k", windowIndex: 1}, "playPause"));
-  assert.deepStrictEqual([state.url, state.title, state.id],
+  assert.deepStrictEqual([state.url, state.title, state.id, state.page],
                          ["https://www.youtube.com/watch?v=n-AfvuV-bYo",
-                          "Fast, Async LaTeX Previews in Org Mode", "k"]);
+                          "Fast, Async LaTeX Previews in Org Mode", "k", "https://blog.example/post"]);
 });
 
 test("_runOn gives up on an embed that never answers", () => {
@@ -264,7 +278,8 @@ test("_runOn gives up on an embed that never answers", () => {
 test("_runOn names a video's state after its tab", () => {
   const browser = scriptedTab([{time: 1, paused: true}]);
   const state = Navegosa._runOn(browser, {id: "k", windowIndex: 1}, "status");
-  assert.deepStrictEqual([state.url, state.title], ["https://blog.example/post", "Post"]);
+  assert.deepStrictEqual([state.url, state.title, state.page],
+                         ["https://blog.example/post", "Post", "https://blog.example/post"]);
 });
 
 // --- page side: the program _probeJS and _mediaJS send, run against a fake DOM
@@ -284,6 +299,7 @@ function fakeEmbed(src, rect) {
              contentWindow: {postMessage: (data) => f.sent.push(JSON.parse(data))},
              getBoundingClientRect: rect || box(0, 0, 680, 382),
              addEventListener: (type, fn) => { if (type === "load") f.loads.push(fn); },
+             scrollIntoView: (opts) => { f.scrolled = opts; },
              requestFullscreen: () => { f.fullscreen = true; }};
   return f;
 }
@@ -445,6 +461,24 @@ test("subtitles warn when the embed lists no track", () => {
   const {f, p} = readyEmbed({});
   assert.strictEqual(p.run("subsToggle").warning, "no subtitles");
   assert.deepStrictEqual(commandsSent(f), [["loadModule", "captions"]]);
+});
+
+test("playAt plays the embed that shows the video, not the player in view", () => {
+  const inView = fakeEmbed("https://www.youtube-nocookie.com/embed/u44X_th6_oY?enablejsapi=1",
+                           box(0, 0, 900, 500));
+  const below = fakeEmbed(EMBED_SRC + "&enablejsapi=1", box(0, 2000, 680, 382));
+  const p = fakePage({iframes: [inView, below]});
+  p.run("status");
+  [inView, below].forEach((f) => {
+    p.reply(f, {event: "initialDelivery", info: {playerState: 2, currentTime: 0, duration: 600}});
+    p.reply(f, {event: "onReady"});
+    f.sent.length = 0;
+  });
+  const state = p.run("playAt", [120, 1.25, "https://www.youtube.com/watch?v=n-AfvuV-bYo"]);
+  assert.deepStrictEqual(commandsSent(below), [["seekTo", 120, true], ["setPlaybackRate", 1.25], ["playVideo"]]);
+  assert.deepStrictEqual(commandsSent(inView), []);
+  assert.deepStrictEqual(below.scrolled, {block: "nearest"});
+  assert.strictEqual(state.url, "https://www.youtube.com/watch?v=n-AfvuV-bYo");
 });
 
 test("an embedded player answers theater with a warning, not a click", () => {

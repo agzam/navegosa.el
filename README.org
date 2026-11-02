@@ -121,7 +121,7 @@ Events (see below). Works on background tabs - no focus stealing.
 Every command echoes the resulting state, e.g. =12:34/56:07 1.5x
 vol:80% Title=.
 
-To hand playback to another player and back, ~navegosa-media-pause~ with a handler gives the tab's URL, time and rate, and the function ~navegosa-media-play-url-at~ plays a URL from a time at a rate: in the tab that shows the same video, else in a new tab.
+To hand playback to another player and back, ~navegosa-media-pause~ with a handler gives the tab's URL, time and rate, and the function ~navegosa-media-play-url-at~ plays a URL from a time at a rate: in the page that embedded the video, while its tab still shows that page, else in the tab that shows the same video, else in a new tab.
 
 Each command is one JXA call: it lists the media tabs by URL, adds each window's shown tab and the last controlled one when they hold a player, checks which of them play, picks the target and runs the command.  The target is the picked tab, else a playing one (the last controlled first), else the shown one, else the last controlled; tabs are tracked by the browser's tab id, so opening, closing or moving tabs never redirects a command.  Play/pause never leaves two videos playing: it pauses every other playing tab, then toggles the target.
 
